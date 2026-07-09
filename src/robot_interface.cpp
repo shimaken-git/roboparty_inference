@@ -38,6 +38,7 @@ RobotInterface::RobotInterface(const std::string& config_file) {
         if (robot_node["close_chain_motor_id"]) robot_cfg_->close_chain_motor_id_ = robot_node["close_chain_motor_id"].as<std::vector<long int>>();
         if (robot_node["motor_sign"]) robot_cfg_->motor_sign_ = robot_node["motor_sign"].as<std::vector<long int>>();
         if (robot_node["urdf2motor"]) robot_cfg_->urdf2motor_ = robot_node["urdf2motor"].as<std::vector<long int>>();
+        if (robot_node["ankle_limit"]) robot_cfg_->ankle_limit_ = robot_node["ankle_limit"].as<std::vector<double>>();
         motor2urdf_ = std::vector<int>(motors_cfg_->motor_id_.size(), -1);
         for (size_t i = 0; i < robot_cfg_->urdf2motor_.size(); ++i) {
             motor2urdf_[robot_cfg_->urdf2motor_[i]] = i;
@@ -94,6 +95,10 @@ void RobotInterface::setup_imu(){
     imu_ = IMUDriver::create_imu(imu_cfg_->imu_id_, imu_cfg_->imu_interface_type_, imu_cfg_->imu_interface_, imu_cfg_->imu_type_, imu_cfg_->baudrate_);
 }
 
+void RobotInterface::load_joint_limits(std::vector<double> limits){
+    joint_limits_ = limits;
+}
+
 void RobotInterface::apply_action(std::vector<float> action) {
     if(!is_init_.load()){
         return;
@@ -110,43 +115,63 @@ void RobotInterface::apply_action(std::vector<float> action) {
             }
         });
 
+        // 足首駆動　位置司令をトルク司令に変換している
+        // テスト用にコメントアウト
+        // if (!close_chain_joint_idx_.empty()){
+        //     Eigen::VectorXd q(2), vel(2), tau(2);
+        //     int idx1 = close_chain_joint_idx_[0];
+        //     int idx2 = close_chain_joint_idx_[1];
+        //     q << joint_q_[idx1], joint_q_[idx2];
+        //     vel << joint_vel_[idx1], joint_vel_[idx2];
+        //     tau << joint_tau_[idx1], joint_tau_[idx2];
+        //     ankle_decouple_->get_forwardQVT(q, vel, tau, true);
+        //     joint_q_[idx1] = q[0];
+        //     joint_q_[idx2] = q[1];
+        //     joint_vel_[idx1] = vel[0];
+        //     joint_vel_[idx2] = vel[1];
+        //     joint_tau_[idx1] = tau[0];
+        //     joint_tau_[idx2] = tau[1];
+        //     tau << robot_cfg_->kp_[close_chain_motor_idx_[0]] * (action[idx1] - q[0]) + robot_cfg_->kd_[close_chain_motor_idx_[0]] * (0.0f - vel[0]),
+        //     robot_cfg_->kp_[close_chain_motor_idx_[1]] * (action[idx2] - q[1]) + robot_cfg_->kd_[close_chain_motor_idx_[1]] * (0.0f - vel[1]);
+        //     ankle_decouple_->get_decoupleQVT(q, vel, tau, true);
+        //     action[idx1] = tau[0];
+        //     action[idx2] = tau[1];
+            
+        //     idx1 = close_chain_joint_idx_[2];
+        //     idx2 = close_chain_joint_idx_[3];
+        //     q << joint_q_[idx1], joint_q_[idx2];
+        //     vel << joint_vel_[idx1], joint_vel_[idx2];
+        //     tau << joint_tau_[idx1], joint_tau_[idx2];
+        //     ankle_decouple_->get_forwardQVT(q, vel, tau, false);
+        //     joint_q_[idx1] = q[0];
+        //     joint_q_[idx2] = q[1];
+        //     joint_vel_[idx1] = vel[0];
+        //     joint_vel_[idx2] = vel[1];
+        //     joint_tau_[idx1] = tau[0];
+        //     joint_tau_[idx2] = tau[1];
+        //     tau << robot_cfg_->kp_[close_chain_motor_idx_[2]] * (action[idx1] - q[0]) + robot_cfg_->kd_[close_chain_motor_idx_[2]] * (0.0f - vel[0]),
+        //     robot_cfg_->kp_[close_chain_motor_idx_[3]] * (action[idx2] - q[1]) + robot_cfg_->kd_[close_chain_motor_idx_[3]] * (0.0f - vel[1]);
+        //     ankle_decouple_->get_decoupleQVT(q, vel, tau, false);
+        //     action[idx1] = tau[0];
+        //     action[idx2] = tau[1];
+        // }
         if (!close_chain_joint_idx_.empty()){
             Eigen::VectorXd q(2), vel(2), tau(2);
             int idx1 = close_chain_joint_idx_[0];
             int idx2 = close_chain_joint_idx_[1];
-            q << joint_q_[idx1], joint_q_[idx2];
-            vel << joint_vel_[idx1], joint_vel_[idx2];
-            tau << joint_tau_[idx1], joint_tau_[idx2];
-            ankle_decouple_->get_forwardQVT(q, vel, tau, true);
-            joint_q_[idx1] = q[0];
-            joint_q_[idx2] = q[1];
-            joint_vel_[idx1] = vel[0];
-            joint_vel_[idx2] = vel[1];
-            joint_tau_[idx1] = tau[0];
-            joint_tau_[idx2] = tau[1];
-            tau << robot_cfg_->kp_[close_chain_motor_idx_[0]] * (action[idx1] - q[0]) + robot_cfg_->kd_[close_chain_motor_idx_[0]] * (0.0f - vel[0]),
-            robot_cfg_->kp_[close_chain_motor_idx_[1]] * (action[idx2] - q[1]) + robot_cfg_->kd_[close_chain_motor_idx_[1]] * (0.0f - vel[1]);
+            check_ankle_angle(action[idx1], action[idx2], true);
+            q << action[idx1], action[idx2];
             ankle_decouple_->get_decoupleQVT(q, vel, tau, true);
-            action[idx1] = tau[0];
-            action[idx2] = tau[1];
+            action[idx1] = q[0];
+            action[idx2] = q[1];
             
             idx1 = close_chain_joint_idx_[2];
             idx2 = close_chain_joint_idx_[3];
-            q << joint_q_[idx1], joint_q_[idx2];
-            vel << joint_vel_[idx1], joint_vel_[idx2];
-            tau << joint_tau_[idx1], joint_tau_[idx2];
-            ankle_decouple_->get_forwardQVT(q, vel, tau, false);
-            joint_q_[idx1] = q[0];
-            joint_q_[idx2] = q[1];
-            joint_vel_[idx1] = vel[0];
-            joint_vel_[idx2] = vel[1];
-            joint_tau_[idx1] = tau[0];
-            joint_tau_[idx2] = tau[1];
-            tau << robot_cfg_->kp_[close_chain_motor_idx_[2]] * (action[idx1] - q[0]) + robot_cfg_->kd_[close_chain_motor_idx_[2]] * (0.0f - vel[0]),
-            robot_cfg_->kp_[close_chain_motor_idx_[3]] * (action[idx2] - q[1]) + robot_cfg_->kd_[close_chain_motor_idx_[3]] * (0.0f - vel[1]);
+            check_ankle_angle(action[idx1], action[idx2], false);
+            q << action[idx1], action[idx2];
             ankle_decouple_->get_decoupleQVT(q, vel, tau, false);
-            action[idx1] = tau[0];
-            action[idx2] = tau[1];
+            action[idx1] = q[0];
+            action[idx2] = q[1];
         }
     }
 
@@ -158,12 +183,110 @@ void RobotInterface::apply_action(std::vector<float> action) {
     }
 
     exec_motors_parallel([this](std::shared_ptr<MotorDriver>& motor, int idx) {
-        if (std::find(close_chain_motor_idx_.begin(), close_chain_motor_idx_.end(), idx) == close_chain_motor_idx_.end()){
-            motor->motor_mit_cmd(motor_target_[idx] * robot_cfg_->motor_sign_[idx], 0.0f, robot_cfg_->kp_[idx], robot_cfg_->kd_[idx], 0.0f);
-        } else {
-            motor->motor_mit_cmd(0.0f, 0.0f, 0.0f, 0.0f, motor_target_[idx] * robot_cfg_->motor_sign_[idx]);
-        }
+        // 足首はトルク制御になっているのでテスト用にすべて位置制御にする。
+        // if (std::find(close_chain_motor_idx_.begin(), close_chain_motor_idx_.end(), idx) == close_chain_motor_idx_.end()){
+        //     motor->motor_mit_cmd(motor_target_[idx] * robot_cfg_->motor_sign_[idx], 0.0f, robot_cfg_->kp_[idx], robot_cfg_->kd_[idx], 0.0f);
+        // } else {
+        //     motor->motor_mit_cmd(0.0f, 0.0f, 0.0f, 0.0f, motor_target_[idx] * robot_cfg_->motor_sign_[idx]);
+        // }
+        motor->motor_mit_cmd(motor_target_[idx] * robot_cfg_->motor_sign_[idx], 0.0f, robot_cfg_->kp_[idx], robot_cfg_->kd_[idx], 0.0f);
     });
+}
+
+void RobotInterface::test_action() {
+    float left_ankle_pitch, left_ankle_roll, right_ankle_pitch, right_ankle_roll;
+    bool ik_valid = true;  // ik成功ならtrue
+    if(!is_init_.load()){
+        return;
+    }
+
+    {
+        std::unique_lock<std::mutex> lock(joint_mutex_);
+        exec_motors_parallel([this](std::shared_ptr<MotorDriver>& motor, int idx) {
+            joint_q_[motor2urdf_[idx]] = motor->get_motor_pos() * robot_cfg_->motor_sign_[idx];
+            joint_vel_[motor2urdf_[idx]] = motor->get_motor_spd() * robot_cfg_->motor_sign_[idx];
+            joint_tau_[motor2urdf_[idx]] = motor->get_motor_current() * robot_cfg_->motor_sign_[idx];
+            if (motor->get_response_count() > offline_threshold_) {
+                throw std::runtime_error("Motor id " + std::to_string(motors_cfg_->motor_id_[idx]) + " offline");
+            }
+        });
+
+        left_ankle_pitch = joint_q_[16]; // left arm elbow
+        left_ankle_roll = -joint_q_[17];  // left arm yaw 
+        right_ankle_pitch = joint_q_[21]; // right arm elbow
+        right_ankle_roll = -joint_q_[22];  // right arm yaw 
+    }
+
+    {
+        std::unique_lock<std::mutex> lock(motors_mutex_);
+        {
+        for (size_t i = 0; i < motor_target_.size(); i++){
+            motor_target_[i] = joint_q_[motor2urdf_[i]];    // 受信した現在角度をターゲットにする
+        }
+        // 腕の転写テスト
+        float sign_[5] = {1, -1, -1, 1, -1};
+        for (size_t i = 13; i < 18; i++){
+            motor_target_[i] = motor_target_[i + 5] * sign_[i - 13];
+        }
+
+        // 足の転写テスト
+        // float sign_[6] = {1, -1, -1, 1, 1, 1};
+        // for (size_t i = 0; i < 6; i++){
+        //     motor_target_[i] = motor_target_[i + 6] * sign_[i];
+        // }
+
+        // 足首テスト
+        // if (!close_chain_joint_idx_.empty()){
+        //     Eigen::VectorXd q(2), vel(2), tau(2);
+        //     int idx1 = close_chain_joint_idx_[0];
+        //     int idx2 = close_chain_joint_idx_[1];
+        //     q << left_ankle_pitch, left_ankle_roll;
+        //     ik_valid = ankle_decouple_->get_decoupleQVT(q, vel, tau, true);
+        //     motor_target_[idx1] = q[0];
+        //     motor_target_[idx2] = q[1];
+        //     // ankle_decouple_->get_forwardQVT(q, vel, tau, true);
+        //     std::cout << "l   pitch: " << left_ankle_pitch << " roll: " << left_ankle_roll << std::endl;
+        //     // std::cout << " fk pitch: " << q[0] << " roll: " << q[1] << std::endl;
+        //     idx1 = close_chain_joint_idx_[2];
+        //     idx2 = close_chain_joint_idx_[3];
+        //     q << right_ankle_pitch, right_ankle_roll;
+        //     vel << 0, 0;
+        //     tau << 0, 0;
+        //     ik_valid = ik_valid && ankle_decouple_->get_decoupleQVT(q, vel, tau, false);
+        //     motor_target_[idx1] = q[0];
+        //     motor_target_[idx2] = q[1];
+        //     // ankle_decouple_->get_forwardQVT(q, vel, tau, false);
+        //     std::cout << "r   pitch: " << right_ankle_pitch << " roll: " << right_ankle_roll << std::endl;
+        //     // std::cout << " fk pitch: " << q[0] << " roll: " << q[1] << std::endl;
+        // }
+        //足首roll/pitch モニター
+        check_motors_angle();
+        if (!close_chain_joint_idx_.empty()){
+            Eigen::VectorXd q(2), vel(2), tau(2);
+            int idx1 = close_chain_joint_idx_[0];
+            int idx2 = close_chain_joint_idx_[1];
+            q[0] = motor_target_[idx1];
+            q[1] = motor_target_[idx2];
+            ankle_decouple_->get_forwardQVT(q, vel, tau, true);
+            std::cout << "left fk pitch: " << q[0] << " roll: " << q[1] << std::endl;
+            // outputfile_ << q[0] << "," << q[1] << ",";
+            idx1 = close_chain_joint_idx_[2];
+            idx2 = close_chain_joint_idx_[3];
+            q[0] = motor_target_[idx1];
+            q[1] = motor_target_[idx2];
+            ankle_decouple_->get_forwardQVT(q, vel, tau, false);
+            std::cout << "right fk pitch: " << q[0] << " roll: " << q[1] << std::endl;
+            // outputfile_ << q[0] << "," << q[1] << std::endl;
+        }
+        }
+    }
+    if(ik_valid){
+        exec_motors_parallel([this](std::shared_ptr<MotorDriver>& motor, int idx) {
+            motor->motor_mit_cmd(motor_target_[idx] * robot_cfg_->motor_sign_[idx], 0.0f, robot_cfg_->kp_[idx], robot_cfg_->kd_[idx], 0.0f);
+        });
+    }else{
+        throw std::runtime_error("ankle IK error");
+    }
 }
 
 void RobotInterface::reset_joints(std::vector<double> joint_default_angle) {
@@ -191,13 +314,14 @@ void RobotInterface::reset_joints(std::vector<double> joint_default_angle) {
         }
     }
 
-    exec_motors_parallel([this](std::shared_ptr<MotorDriver>& motor, int idx) {
-        motor->motor_mit_cmd(motor_target_[idx] * robot_cfg_->motor_sign_[idx], 0.0f, robot_cfg_->kp_[idx]/2.5f, robot_cfg_->kd_[idx], 0.0f);
-    });
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    exec_motors_parallel([this](std::shared_ptr<MotorDriver>& motor, int idx) {
-        motor->motor_mit_cmd(motor_target_[idx] * robot_cfg_->motor_sign_[idx], 0.0f, robot_cfg_->kp_[idx], robot_cfg_->kd_[idx], 0.0f);
-    });
+    float dev_ = 5.0;
+    while(dev_ >= 1.0){
+        exec_motors_parallel([this, &dev_](std::shared_ptr<MotorDriver>& motor, int idx) {
+            motor->motor_mit_cmd(motor_target_[idx] * robot_cfg_->motor_sign_[idx], 0.0f, robot_cfg_->kp_[idx]/dev_, robot_cfg_->kd_[idx], 0.0f);
+        });
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        dev_ -= 0.2;
+    }
 }
 
 void RobotInterface::refresh_joints() {
@@ -289,4 +413,45 @@ void RobotInterface::exec_motors_parallel(const std::function<void(std::shared_p
         count += num_motors;
     }
     thread_pool_->run_parallel(tasks);
+}
+
+void RobotInterface::check_motors_angle(){
+    for(int i = 0; i < motor_target_.size(); i++){
+        if(motor_target_[i] < joint_limits_[i * 2]) {
+            std::cout << "[" << i << "] too small " << motor_target_[i] << " " << joint_limits_[i * 2] << std::endl;
+            motor_target_[i] = joint_limits_[i * 2];
+        }
+        else if(motor_target_[i] > joint_limits_[i * 2 + 1]){
+            std::cout << "[" << i << "] too large " << motor_target_[i] << " " << joint_limits_[i * 2 + 1] << std::endl;
+            motor_target_[i] = joint_limits_[i * 2 + 1];
+        }
+    }
+}
+
+void RobotInterface::check_ankle_angle(float &pitch, float &roll, bool leftLegFlag){
+    int side;
+    string side_str;
+    if(leftLegFlag){
+        side = 0;
+        side_str = "left";
+     }else{
+        side = 1;
+        side_str = "right";
+     }
+    if(pitch < robot_cfg_->ankle_limit_[0 + side * 4]){
+        std::cout << side_str << " pitch limit lower " << pitch << " -> " << robot_cfg_->ankle_limit_[0 + side *4] << std::endl;
+        pitch = robot_cfg_->ankle_limit_[0 + side *4];
+    }
+    if(pitch > robot_cfg_->ankle_limit_[1 + side * 4]){
+        std::cout << side_str << " pitch limit over " << pitch << " -> " << robot_cfg_->ankle_limit_[1 + side *4] << std::endl;
+        pitch = robot_cfg_->ankle_limit_[1 + side *4];
+    }
+    if(roll < robot_cfg_->ankle_limit_[2 + side * 4]){
+        std::cout << side_str << " roll limit lower " << roll << " -> " << robot_cfg_->ankle_limit_[2 + side *4] << std::endl;
+        roll = robot_cfg_->ankle_limit_[2 + side *4];
+    }
+    if(roll > robot_cfg_->ankle_limit_[3 + side * 4]){
+        std::cout << side_str << " roll limit over " << roll << " -> " << robot_cfg_->ankle_limit_[3 + side *4] << std::endl;
+        roll = robot_cfg_->ankle_limit_[3 + side *4];
+    }
 }

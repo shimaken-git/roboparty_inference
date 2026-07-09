@@ -19,6 +19,7 @@
 #include "utils/thread_pool.hpp"
 #include "motor_driver.hpp"
 #include "imu_driver.hpp"
+#include <fstream>
 
 class RobotInterface {
    public:
@@ -27,6 +28,9 @@ class RobotInterface {
         deinit_motors();
         motors_.clear();
         imu_.reset();
+        if (outputfile_.is_open()) {
+            outputfile_.close();
+        }
     }
     struct IMUCfg{
         int imu_id_, baudrate_;
@@ -42,10 +46,12 @@ class RobotInterface {
     };
     struct RobotCfg{
         std::vector<long int> close_chain_motor_id_, motor_sign_, urdf2motor_;
+        std::vector<double> ankle_limit_;
         std::vector<double> kp_, kd_, extrinsic_R_;
     };
 
     void apply_action(std::vector<float> action);
+    void test_action();
     void init_motors();
     void deinit_motors();
     void reset_joints(std::vector<double> joint_default_angle);
@@ -97,6 +103,8 @@ class RobotInterface {
     }
 
     std::atomic<bool> is_init_{false};
+    void load_joint_limits(std::vector<double> limits);
+
 
    private:
     std::shared_ptr<IMUCfg> imu_cfg_;
@@ -117,8 +125,13 @@ class RobotInterface {
     std::vector<float> joint_q_, joint_vel_, joint_tau_, motor_target_;
     std::vector<int> close_chain_motor_idx_, close_chain_joint_idx_, motor2urdf_;
 
+    std::vector<double> joint_limits_;
+
+    std::ofstream outputfile_;
+
     void setup_motors();
     void setup_imu();
-
+    void check_motors_angle();
+    void check_ankle_angle(float &pitch, float &roll, bool leftLegFlag);
     void exec_motors_parallel(const std::function<void(std::shared_ptr<MotorDriver>&, int)>& cmd_func);
 };

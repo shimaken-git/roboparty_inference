@@ -56,6 +56,39 @@ void Decouple::print_kinematics_result(const InsKinematicsResult &result)
 //////********************print******************************//////
 
 //////********************inverse kinematics*****************//////
+std::vector<Eigen::Vector3d>
+Decouple::sphere_circle_intersections(
+    Eigen::Vector3d &sphere_center, double &sphere_radius, Eigen::Vector3d &circle_center, double &circle_radius)
+{
+    std::vector<Eigen::Vector3d> result;
+    double dy = circle_center[1] - sphere_center[1]; //dy = cy - sy
+    if (fabs(dy) > sphere_radius) return result;  //空の結果＝エラー
+
+    double r_cross = sqrt(sphere_radius * sphere_radius - dy * dy);
+    Eigen::Vector2d p0 = {sphere_center[0], sphere_center[2]};
+    Eigen::Vector2d p1 = {circle_center[0], circle_center[2]};
+    double d = (p1 - p0).norm();
+
+    if(d > r_cross + circle_radius) return result;  // 交点なし
+    if(d < fabs(r_cross - circle_radius)) return result; // 一方が他方を内包
+    if(d == 0 && r_cross == circle_radius) return result;  // 同心円
+
+    double a = (r_cross * r_cross - circle_radius * circle_radius + d * d) / (2 * d);
+    double h_sq = r_cross * r_cross - a * a;
+    if(h_sq < 0) h_sq = 0;  // 数値誤差対策
+    double h = sqrt(h_sq);
+
+    Eigen::Vector2d p2 = p0 + a * (p1 - p0) / d;
+    double rx = -(p1[1] - p0[1]) * (h / d);
+    double rz =  (p1[0] - p0[0]) * (h / d);
+
+    Eigen::Vector3d intersection1 = {p2[0] + rx, circle_center[1], p2[1] + rz};
+    Eigen::Vector3d intersection2 = {p2[0] - rx, circle_center[1], p2[1] - rz};
+    result.push_back(intersection1);
+    result.push_back(intersection2);
+    return result;
+}
+
 InsKinematicsResult
 Decouple::inverse_kinematics(
     double q_roll,
@@ -65,27 +98,16 @@ Decouple::inverse_kinematics(
 
     result.THETA = Eigen::Vector2d::Zero();
 
-    double l_bar = 20; // # up
-
-    double l_rod[2] = {180, 110}; // # long rod
-    double l_spacing = leftLegFlag ? 42.35 : -42.35;  // # spacing between legs
-
-    double short_link_angle_0 = 180 * M_PI / 180;
-    double long_link_angle_0 = 0 * M_PI / 180;
-
-    double r_B1_0_x = -l_bar * cos(long_link_angle_0);
-    double r_B1_0_z = 180 - l_bar * sin(long_link_angle_0);
-    double r_B2_0_x = -l_bar * cos(short_link_angle_0);
-    double r_B2_0_z = 110 - l_bar * sin(short_link_angle_0);
+    double y_sign = leftLegFlag? 1.0 : -1.0;
 
     // Define points
-    Eigen::Vector3d r_A1_0{0, l_spacing, 180};
-    Eigen::Vector3d r_B1_0{r_B1_0_x, l_spacing, r_B1_0_z};
-    Eigen::Vector3d r_C1_0{-20, l_spacing, 0};
+    Eigen::Vector3d r_A1_0{motor_x[0], motor_y[0] * y_sign, motor_z[0]};  // upper motor axis
+    Eigen::Vector3d r_B1_0{-l_bar, 0, 0};
+    Eigen::Vector3d r_C1_0{conn_x[0], conn_y[0] * y_sign, conn_z[0]};
 
-    Eigen::Vector3d r_A2_0{0, l_spacing, 110};
-    Eigen::Vector3d r_B2_0{r_B2_0_x, l_spacing, r_B2_0_z};
-    Eigen::Vector3d r_C2_0{20, l_spacing, 0};
+    Eigen::Vector3d r_A2_0{motor_x[1], motor_y[1] * y_sign, motor_z[1]};  // lower motor axis
+    Eigen::Vector3d r_B2_0{l_bar, 0, 0};
+    Eigen::Vector3d r_C2_0{conn_x[1], conn_y[1] * y_sign, conn_z[1]};
 
     std::vector<Eigen::Vector3d> r_A_0;
     r_A_0.push_back(r_A1_0);
@@ -119,24 +141,18 @@ Decouple::inverse_kinematics(
     {
         Eigen::Vector3d r_A_i = r_A_0[i];
         Eigen::Vector3d r_C_i = x_rot * r_C_0[i];
-        Eigen::Vector3d rBA_bar = r_B_0[i] - r_A_0[i];
+        Eigen::Vector3d rBA_bar = r_B_0[i];
 
-        double a = r_C_i[0] - r_A_i[0];
-        double b = r_A_i[2] - r_C_i[2];
-        double c = (l_rod[i] * l_rod[i] - l_bar * l_bar - (r_C_i - r_A_i).squaredNorm()) / (2 * l_bar);
-
-        double a_sq = a * a;
-        double b_sq = b * b;
-        double c_sq = c * c;
-        double ab_sq_sum = a_sq + b_sq;
-        double discriminant = b_sq * c_sq - ab_sq_sum * (c_sq - a_sq);
-        if (discriminant < 0) {
-            std::cerr << "Warning: Negative discriminant in inverse kinematics. Setting theta_i to 0." << std::endl;
-            discriminant = 0;
+        auto inter_sections = sphere_circle_intersections(r_C_i, l_rod[i], r_A_i, l_bar);
+        Eigen::Vector3d is;
+        //解説：２つの交点のうち、inside(front)はindex1の交点、outside(rear)はindex0の交点を採用
+        if(inter_sections.size() != 0) is = inter_sections[i];
+        else{
+            std::cout << "inverse_kinematics err" << std::endl;
+            std::cout << "pitch: " << q_pitch << " roll: " << q_roll << " side: " << leftLegFlag << std::endl;
+            return result;
         }
-
-        double theta_i = asin((b * c + sqrt(discriminant)) / ab_sq_sum);
-        theta_i = a < 0 ? theta_i : -theta_i;
+        double theta_i = asin((is[2] - r_A_i[2]) / l_bar) * (i == 0 ? 1.0 : -1.0);
 
         Eigen::Matrix3d R_y_theta = Eigen::Matrix3d::Zero();
         R_y_theta << std::cos(theta_i), 0, std::sin(theta_i),
@@ -271,8 +287,9 @@ Decouple::forward_kinematics(const Eigen::Vector2d &thetaRef, bool leftLegFlag)
 
 // from x to theta， from Serial to Parallel
 // force control ,should input current pitch roll
-void Decouple::get_decoupleQVT(Eigen::VectorXd &q, Eigen::VectorXd &vel, Eigen::VectorXd &tau, bool leftLegFlag)
+bool Decouple::get_decoupleQVT(Eigen::VectorXd &q, Eigen::VectorXd &vel, Eigen::VectorXd &tau, bool leftLegFlag)
 {
+    //　pitch, rollを受け取って、2つのモーター角度に分解する。
     double Pitch, Roll;
     Pitch = q[0]; // rotation axis [0 1 0]
     Roll = q[1];
@@ -283,6 +300,8 @@ void Decouple::get_decoupleQVT(Eigen::VectorXd &q, Eigen::VectorXd &vel, Eigen::
     q.segment<2>(0) = motor.first;
     vel.segment<2>(0) = motor.second[1] * (vel.segment<2>(0));
     tau.segment<2>(0) = motor.second[0].transpose() * (tau.segment<2>(0));
+    if(motor.first[0] == 100) return false;
+    else return true;
 }
 
 void Decouple::get_forwardQVT(Eigen::VectorXd &q, Eigen::VectorXd &vel, Eigen::VectorXd &tau, bool leftLegFlag)

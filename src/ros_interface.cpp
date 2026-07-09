@@ -160,18 +160,18 @@ void InferenceNode::load_config() {
 void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Joy> msg) {
     if (is_joy_control_){
         std::unique_lock<std::mutex> lock(cmd_mutex_);
-        cmd_vel_[0] = std::clamp(msg->axes[4] * clip_cmd_[1], clip_cmd_[0], clip_cmd_[1]);
-        cmd_vel_[1] = std::clamp(msg->axes[3] * clip_cmd_[3], clip_cmd_[2], clip_cmd_[3]);
-            if (msg->axes[2] < 0) {
-            cmd_vel_[2] = std::clamp(-msg->axes[2] * clip_cmd_[5], clip_cmd_[4], clip_cmd_[5]);
-            } else if (msg->axes[5] < 0) {
-            cmd_vel_[2] = std::clamp(msg->axes[5] * clip_cmd_[5], clip_cmd_[4], clip_cmd_[5]);
-            } else {
+        cmd_vel_[0] = std::clamp(msg->axes[1] * clip_cmd_[1], clip_cmd_[0], clip_cmd_[1]);  //X方向   Xbox:axes[4] PS4:axes[1] left stick stride
+        cmd_vel_[1] = std::clamp(msg->axes[0] * clip_cmd_[3], clip_cmd_[2], clip_cmd_[3]);  //Y方向   Xbox:axes[3] PS4:axes[0] left stick slide
+        if (msg->axes[3] < 0) {   // Z軸旋回  Xbox:axes[2] PS4:axes[3] right stick slide
+            cmd_vel_[2] = std::clamp(msg->axes[2] * clip_cmd_[5], clip_cmd_[4], clip_cmd_[5]);
+        // } else if (msg->axes[5] < 0) {   //わからんのでとりあえずコメントアウト
+        //     cmd_vel_[2] = std::clamp(msg->axes[5] * clip_cmd_[5], clip_cmd_[4], clip_cmd_[5]);
+        } else {
             cmd_vel_[2] = 0.0;
         }
     }
-    if ((msg->buttons[2] == 1 && msg->buttons[2] != last_button0_)) {
-        if(is_running_.load()){
+    if ((msg->buttons[9] == 1 && msg->buttons[9] != last_button0_)) {  //Xbox:X PS4:options　　initialize/deinitialize motors
+        if(is_running_.load() || is_test_.load()){
             reset_runtime_state();
             RCLCPP_INFO(this->get_logger(), "Inference paused");
         }
@@ -183,8 +183,8 @@ void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Jo
             RCLCPP_INFO(this->get_logger(), "Motors initialized");
         }
     }
-    if (msg->buttons[0] == 1 && msg->buttons[0] != last_button1_) {
-        if (is_running_.load()){
+    if (msg->buttons[10] == 1 && msg->buttons[10] != last_button1_) {  //Xbox:A PS4:PS　reset motors
+        if (is_running_.load() || is_test_.load()){
             reset_runtime_state();
             RCLCPP_INFO(this->get_logger(), "Inference paused");
         }
@@ -195,16 +195,20 @@ void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Jo
             RCLCPP_INFO(this->get_logger(), "Motors reset");
         }
     }
-    if (msg->buttons[1] == 1 && msg->buttons[1] != last_button2_) {
+    if (msg->buttons[1] == 1 && msg->buttons[1] != last_button2_) {  //Xbox:B PS4:○　start/pause inference
         is_running_.store(!is_running_.load());
         RCLCPP_INFO(this->get_logger(), "Inference %s", is_running_.load() ? "started" : "paused");
     }
-    if (msg->buttons[3] == 1 && msg->buttons[3] != last_button3_) {
+    if (msg->buttons[8] == 1 && msg->buttons[8] != last_button3_) {  //Xbox:Y PS4:share  joy or cmd_vel
         is_joy_control_.store(!is_joy_control_);
         RCLCPP_INFO(this->get_logger(), "Controlled by %s", is_joy_control_.load() ? "joy" : "/cmd_vel");
     }
+    if (msg->buttons[4] == 1 && msg->buttons[4] != last_button6_) {  //PS4:L1  test mode
+        is_test_.store(!is_test_);
+        RCLCPP_INFO(this->get_logger(), "Controlled by %s", is_test_.load() ? "test on" : "test off");
+    }
     if (supports_interrupt() || has_motion_policy()) {
-        if (msg->buttons[4] == 1 && msg->buttons[4] != last_button4_) {
+        if (msg->buttons[3] == 1 && msg->buttons[3] != last_button4_) {     // Xbox:LB PS4:□　switch policy mode
             const auto switch_while_paused = [this](auto&& switch_mode) {
                 std::unique_lock<std::mutex> switch_lock(lb_switch_mutex_);
                 const bool restore_running = is_running_.exchange(false);
@@ -243,10 +247,10 @@ void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Jo
                 });
             }
         }
-        last_button4_ = msg->buttons[4];
+        last_button4_ = msg->buttons[3];
     }
     if (has_motion_policy()) {
-        if (msg->buttons[5] == 1 && msg->buttons[5] != last_button5_) {
+        if (msg->buttons[0] == 1 && msg->buttons[0] != last_button5_) {     // Xbox:RB PS4:×　switch motion sequence
             std::unique_lock<std::mutex> lock(mode_mutex_);
             if (is_motion_policy_.load()) {
                 RCLCPP_WARN(this->get_logger(), "Cannot switch motion policy while in motion policy mode");
@@ -255,12 +259,14 @@ void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Jo
                 RCLCPP_INFO(this->get_logger(), "Selected policy: %s", policies_[motion_policy_indices_[current_motion_policy_idx_]].name.c_str());
             }
         }
-        last_button5_ = msg->buttons[5];
+        last_button5_ = msg->buttons[0];
     }
-    last_button0_ = msg->buttons[2];
-    last_button1_ = msg->buttons[0];
-    last_button2_ = msg->buttons[1];
+    last_button0_ = msg->buttons[9];
+    last_button1_ = msg->buttons[10];
+    last_button2_ = msg->buttons[8];
     last_button3_ = msg->buttons[3];
+    last_button6_ = msg->buttons[4];
+    last_button7_ = msg->buttons[5];
 }
 
 void InferenceNode::subs_cmd_callback(const std::shared_ptr<geometry_msgs::msg::Twist> msg){

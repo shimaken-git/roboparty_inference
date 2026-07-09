@@ -119,6 +119,7 @@ void InferenceNode::reset_runtime_state() {
     is_running_.store(false);
     is_interrupt_.store(false);
     is_motion_policy_.store(false);
+    is_test_.store(false);
     active_policy_idx_ = 0;
     {
         std::unique_lock<std::mutex> lock(cmd_mutex_);
@@ -217,16 +218,22 @@ void InferenceNode::reset_policy_runtime(PolicyRuntime& policy) {
 }
 
 void InferenceNode::apply_action() {
-    if(!is_running_.load() || !robot_->is_init_.load()){
+    if((!is_running_.load() && !is_test_.load()) || !robot_->is_init_.load()){
         return;
     }
-    {
-        std::unique_lock<std::mutex> lock(act_mutex_);
-        for (size_t i = 0; i < act_.size(); i++) {
-            last_act_[i] = act_alpha_ * act_[i] + (1 - act_alpha_) * last_act_[i];
+    if(is_running_.load()){
+        {
+            std::unique_lock<std::mutex> lock(act_mutex_);
+            for (size_t i = 0; i < act_.size(); i++) {
+                last_act_[i] = act_alpha_ * act_[i] + (1 - act_alpha_) * last_act_[i];
+            }
         }
+        robot_->apply_action(last_act_);
+    } else if(is_test_.load()){
+        robot_->test_action();
+        publish_joint_states();
+        publish_imu();
     }
-    robot_->apply_action(last_act_);
 }
 
 void InferenceNode::control() {
@@ -306,6 +313,14 @@ void InferenceNode::inference() {
                     policy.ctx->output_buffer[i] = std::clamp(policy.ctx->output_buffer[i], -clip_actions_, clip_actions_);
                     act_[usd2urdf_[i]] = policy.ctx->output_buffer[i];
                     act_[usd2urdf_[i]] = act_[usd2urdf_[i]] * action_scale_ + joint_default_angle_[usd2urdf_[i]];
+                    if(act_file.is_open()){
+                        act_file << act_[usd2urdf_[i]];
+                        if(i < policy.ctx->output_buffer.size() - 1){
+                            act_file << ",";
+                        }else{
+                            act_file << std::endl;
+                        }
+                    }
                 }
                 if(supports_interrupt() && is_interrupt_.load()){
                     std::unique_lock<std::mutex> lock(interrupt_mutex_);
@@ -322,14 +337,14 @@ void InferenceNode::inference() {
         }
 
         auto loop_end = std::chrono::steady_clock::now();
-        // 使用微秒进行计算
+        // 使用微秒进行计算  // 計算にはマイクロ秒を使用する
         auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(loop_end - loop_start);
         auto sleep_time = period - elapsed_time;
 
         if (sleep_time > std::chrono::microseconds(0)) {
             std::this_thread::sleep_for(sleep_time);
         } else {
-            // 警告信息也使用更精确的单位
+            // 警告信息也使用更精确的单位  // 警告メッセージではより正確な単位も使用されます
             RCLCPP_WARN(this->get_logger(), "Inference loop overran! Took %lld us, but period is %lld us.", static_cast<long long>(elapsed_time.count()), static_cast<long long>(period.count()));
         }
     }
@@ -352,18 +367,18 @@ int main(int argc, char **argv) {
         node = std::make_shared<InferenceNode>();
         rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 2);
         executor.add_node(node);
-        RCLCPP_INFO(node->get_logger(), "Press 'X' to initialize/deinitialize motors");
-        RCLCPP_INFO(node->get_logger(), "Press 'A' to reset motors");
-        RCLCPP_INFO(node->get_logger(), "Press 'B' to start/pause inference");
-        RCLCPP_INFO(node->get_logger(), "Press 'Y' to switch between Gamepad Control / cmd_vel Control");
+        RCLCPP_INFO(node->get_logger(), "Press 'OPTIONS' to initialize/deinitialize motors");
+        RCLCPP_INFO(node->get_logger(), "Press 'PS' to reset motors");
+        RCLCPP_INFO(node->get_logger(), "Press '○' to start/pause inference");
+        RCLCPP_INFO(node->get_logger(), "Press 'SHARE' to switch between Gamepad Control / cmd_vel Control");
         if (node->supports_interrupt() || node->has_motion_policy()){
-            RCLCPP_INFO(node->get_logger(), "Press 'LB' to switch policy mode (available in beyondmimic / interrupt modes)");
+            RCLCPP_INFO(node->get_logger(), "Press '□' to switch policy mode (available in beyondmimic / interrupt modes)");
         }
         if (node->has_motion_policy()){
-            RCLCPP_INFO(node->get_logger(), "Press 'RB' to switch motion sequence (available in beyondmimic mode)");
+            RCLCPP_INFO(node->get_logger(), "Press 'X' to switch motion sequence (available in beyondmimic mode)");
         }
-        RCLCPP_INFO(node->get_logger(), "Right Stick: Control forward, backward, left and right movement");
-        RCLCPP_INFO(node->get_logger(), "LT/RT: Control turning (left / right rotation)");
+        RCLCPP_INFO(node->get_logger(), "Left Stick: Control forward, backward, left and right movement");
+        RCLCPP_INFO(node->get_logger(), "Right Stick: Control turning (left / right rotation)");
         executor.spin();
     } catch (const std::exception &e) {
         RCLCPP_FATAL(rclcpp::get_logger("main"), "Exception caught: %s", e.what());

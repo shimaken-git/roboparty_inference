@@ -7,7 +7,7 @@ import os
 def generate_launch_description():
     configs = [
         os.path.join(
-            get_package_share_directory("inference"),
+            get_package_share_directory("roboto_inference"),
             "config",
             "inference.yaml",
         ),
@@ -16,8 +16,8 @@ def generate_launch_description():
     return LaunchDescription(
         [
             Node(
-                package="inference",
-                executable="inference_node",
+                package="roboto_inference",
+                executable="roboto_inference_node",
                 name="inference_node",
                 parameters=configs,
                 output="screen",

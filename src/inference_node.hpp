@@ -26,6 +26,7 @@
 #include "utils/motion_loader.hpp"
 #include <std_srvs/srv/trigger.hpp>
 #include "robot_interface.hpp"
+#include <fstream>
 
 enum class ObsStackOrder {
     FrameMajor,
@@ -88,6 +89,8 @@ class InferenceNode : public rclcpp::Node {
         load_config();
 
         robot_ = std::make_shared<RobotInterface>(std::string(ROOT_DIR) + "config/robot.yaml");
+        robot_->load_joint_limits(joint_limits_);
+        act_file.open("actions.csv");
 
         Ort::ThreadingOptions thread_opts;
         if (intra_threads_ > 0) {
@@ -176,12 +179,15 @@ class InferenceNode : public rclcpp::Node {
         if(robot_){
             robot_.reset();
         }
+        if(act_file.is_open()){
+            act_file.close();
+        }
     }
     bool supports_interrupt() const;
     bool has_motion_policy() const;
    private:
     std::shared_ptr<RobotInterface> robot_;
-    std::atomic<bool> is_running_{false}, is_joy_control_{true}, is_interrupt_{false}, is_motion_policy_{false};
+    std::atomic<bool> is_running_{false}, is_joy_control_{true}, is_interrupt_{false}, is_motion_policy_{false}, is_test_{false};
     std::string perception_obs_topic_;
     size_t current_motion_policy_idx_ = 0;
     int active_policy_idx_ = 0;
@@ -207,7 +213,7 @@ class InferenceNode : public rclcpp::Node {
     std::vector<double> clip_cmd_, joint_default_angle_, joint_limits_;
     std::vector<long int> usd2urdf_;
     float gravity_z_upper_;
-    int last_button0_ = 0, last_button1_ = 0, last_button2_ = 0, last_button3_ = 0, last_button4_ = 0, last_button5_ = 0;
+    int last_button0_ = 0, last_button1_ = 0, last_button2_ = 0, last_button3_ = 0, last_button4_ = 0, last_button5_ = 0, last_button6_ = 0, last_button7_ = 0;
     std::vector<PolicyRuntime> policies_;
     std::vector<int> motion_policy_indices_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_joints_service_, set_zeros_service_, clear_errors_service_, refresh_joints_service_, read_joints_service_, read_imu_service_, init_motors_service_, deinit_motors_service_, start_inference_service_, stop_inference_service_;
@@ -216,6 +222,8 @@ class InferenceNode : public rclcpp::Node {
     std::vector<float> act_, last_act_, cmd_vel_, interrupt_action_, perception_obs_buffer_;
     std::vector<float> joint_pos_buffer_, joint_vel_buffer_, joint_torques_buffer_, quat_buffer_, ang_vel_buffer_;
     sensor_msgs::msg::JointState joint_state_msg_, action_msg_;
+
+    std::ofstream act_file;
 
     void subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Joy> msg);
     void subs_cmd_callback(const std::shared_ptr<geometry_msgs::msg::Twist> msg);

@@ -153,6 +153,7 @@ void InferenceNode::get_gravity_b_obs(std::vector<float>& segment) {
     Eigen::Vector3f gravity_w(0.0f, 0.0f, -1.0f);
     Eigen::Quaternionf q_w2b = q_b2w.inverse();
     Eigen::Vector3f gravity_b = q_w2b * gravity_w;
+    std::cout << "gravity_b: " << gravity_b.transpose() << std::endl;
     if (gravity_b.z() > gravity_z_upper_){
         RCLCPP_FATAL(this->get_logger(), "Robot fell down! Shutting down...");
         rclcpp::shutdown();
