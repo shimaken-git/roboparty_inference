@@ -25,6 +25,7 @@ void InferenceNode::load_config() {
     this->declare_parameter<std::vector<double>>("clip_cmd", std::vector<double>{});
     this->declare_parameter<std::vector<double>>("joint_default_angle", std::vector<double>{});
     this->declare_parameter<std::vector<double>>("joint_limits", std::vector<double>{});
+    this->declare_parameter<std::vector<double>>("imu_correction", std::vector<double>{});
     this->declare_parameter<float>("gravity_z_upper", -0.5);
     std::vector<std::string> model_names;
     std::vector<std::string> motion_names;
@@ -57,6 +58,7 @@ void InferenceNode::load_config() {
     this->get_parameter("joint_default_angle", joint_default_angle_);
     this->get_parameter("joint_limits", joint_limits_);
     this->get_parameter("gravity_z_upper", gravity_z_upper_);
+    this->get_parameter("imu_correction", imu_correction_);
 
     policies_.clear();
     motion_policy_indices_.clear();
@@ -162,13 +164,7 @@ void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Jo
         std::unique_lock<std::mutex> lock(cmd_mutex_);
         cmd_vel_[0] = std::clamp(msg->axes[1] * clip_cmd_[1], clip_cmd_[0], clip_cmd_[1]);  //X方向   Xbox:axes[4] PS4:axes[1] left stick stride
         cmd_vel_[1] = std::clamp(msg->axes[0] * clip_cmd_[3], clip_cmd_[2], clip_cmd_[3]);  //Y方向   Xbox:axes[3] PS4:axes[0] left stick slide
-        if (msg->axes[3] < 0) {   // Z軸旋回  Xbox:axes[2] PS4:axes[3] right stick slide
-            cmd_vel_[2] = std::clamp(msg->axes[2] * clip_cmd_[5], clip_cmd_[4], clip_cmd_[5]);
-        // } else if (msg->axes[5] < 0) {   //わからんのでとりあえずコメントアウト
-        //     cmd_vel_[2] = std::clamp(msg->axes[5] * clip_cmd_[5], clip_cmd_[4], clip_cmd_[5]);
-        } else {
-            cmd_vel_[2] = 0.0;
-        }
+        cmd_vel_[2] = std::clamp(msg->axes[3] * clip_cmd_[5], clip_cmd_[4], clip_cmd_[5]);   // Z軸旋回  Xbox:axes[2] PS4:axes[3] right stick slide
     }
     if ((msg->buttons[9] == 1 && msg->buttons[9] != last_button0_)) {  //Xbox:X PS4:options　　initialize/deinitialize motors
         if(is_running_.load() || is_test_.load()){
@@ -261,10 +257,14 @@ void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Jo
         }
         last_button5_ = msg->buttons[0];
     }
+    if(msg->buttons[5] == 1 && msg->buttons[5] != last_button7_ && msg->axes[7] == -1){     // R1　+ ⇧　　Error reset
+        robot_->clear_errors();
+        std::cout << "Clear motor errors." << std::endl;
+    }
     last_button0_ = msg->buttons[9];
     last_button1_ = msg->buttons[10];
-    last_button2_ = msg->buttons[8];
-    last_button3_ = msg->buttons[3];
+    last_button2_ = msg->buttons[1];
+    last_button3_ = msg->buttons[8];
     last_button6_ = msg->buttons[4];
     last_button7_ = msg->buttons[5];
 }

@@ -5,6 +5,8 @@
 #include <cmath>
 #include <Eigen/Dense>
 #include <map>
+#include <algorithm>
+#include <limits>
 
 using namespace std;
 
@@ -48,6 +50,14 @@ public:
 
     bool get_decoupleQVT(Eigen::VectorXd &q, Eigen::VectorXd &vel, Eigen::VectorXd &tau, bool leftLegFlag);
     void get_forwardQVT(Eigen::VectorXd &q, Eigen::VectorXd &vel, Eigen::VectorXd &tau, bool leftLegFlag);
+
+    bool isInsidePolygon(const Eigen::Vector2d &p, bool leftLegFlag);
+    Eigen::Vector2d closestPointOnSegment(const Eigen::Vector2d& p, const Eigen::Vector2d& a, const Eigen::Vector2d& b);
+    Eigen::Vector2d closestPointOnPolygon(const Eigen::Vector2d& p, bool leftLegFlag);
+    void setAnkleAngleRange(const std::vector<Eigen::Vector2d> &leftLegRange, const std::vector<Eigen::Vector2d> &rightLegRange);
+
+    std::vector<Eigen::Vector2d> ankleAngleRange[2]; // 0: left, 1: right
+
     std::map<bool, Eigen::Vector2d> last_solution_;
     double l_bar = 0.040;
 

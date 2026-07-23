@@ -314,3 +314,101 @@ void Decouple::get_forwardQVT(Eigen::VectorXd &q, Eigen::VectorXd &vel, Eigen::V
     vel.segment<2>(0) = joint.Jac[0] * (vel.segment<2>(0));             // vel transfer from motor to ankle joint
     tau.segment<2>(0) = joint.Jac[1].transpose() * (tau.segment<2>(0)); // tau transfer from motor to ankle joint
 }
+
+inline double cross2d(const Eigen::Vector2d& a,
+                      const Eigen::Vector2d& b)
+{
+    return a.x() * b.y() - a.y() * b.x();
+}
+
+bool Decouple::isInsidePolygon(const Eigen::Vector2d &p, bool leftLegFlag)
+{
+    constexpr double EPS = 1e-10;
+    std::vector<Eigen::Vector2d> polygon = leftLegFlag ? ankleAngleRange[0] : ankleAngleRange[1];
+    int n = polygon.size();
+    bool inside = false;
+
+    for (int i = 0; i < n; ++i)
+    {
+        const auto& a = polygon[i];
+        const auto& b = polygon[(i + 1) % n];
+
+        // -------------------------
+        // 境界上の判定
+        // -------------------------
+        // double cross =
+        //     (p.x() - a.x()) * (b.y() - a.y()) -
+        //     (p.y() - a.y()) * (b.x() - a.x());
+        double cross = cross2d(p - a, b - a);
+
+        if (std::abs(cross) < EPS)
+        {
+            if (std::min(a.x(), b.x()) - EPS <= p.x() &&
+                p.x() <= std::max(a.x(), b.x()) + EPS &&
+                std::min(a.y(), b.y()) - EPS <= p.y() &&
+                p.y() <= std::max(a.y(), b.y()) + EPS)
+            {
+                return true;
+            }
+        }
+
+        // -------------------------
+        // Ray Casting
+        // -------------------------
+        if ((a.y() > p.y()) != (b.y() > p.y()))
+        {
+            double intersectX =
+                a.x() + (p.y() - a.y()) * (b.x() - a.x()) / (b.y() - a.y());
+
+            if (p.x() < intersectX)
+                inside = !inside;
+        }
+    }
+
+    return inside;
+}
+
+void Decouple::setAnkleAngleRange(const std::vector<Eigen::Vector2d> &leftLegRange, const std::vector<Eigen::Vector2d> &rightLegRange)
+{
+    ankleAngleRange[0] = leftLegRange;
+    ankleAngleRange[1] = rightLegRange;
+}
+
+//辺への最近接点を求める関数
+Eigen::Vector2d Decouple::closestPointOnSegment(const Eigen::Vector2d& p, const Eigen::Vector2d& a, const Eigen::Vector2d& b)
+{
+    Eigen::Vector2d ab = b - a;
+
+    double t = (p - a).dot(ab) / ab.squaredNorm();
+    t = std::clamp(t, 0.0, 1.0);
+
+    return a + t * ab;
+}
+
+//多角形上の最近接点を求める関数
+Eigen::Vector2d Decouple::closestPointOnPolygon(const Eigen::Vector2d& p, bool leftLegFlag)
+{
+    std::vector<Eigen::Vector2d> polygon = leftLegFlag ? ankleAngleRange[0] : ankleAngleRange[1];
+    double min_dist2 = std::numeric_limits<double>::max();
+    Eigen::Vector2d closest;
+
+    int n = polygon.size();
+
+    for (int i = 0; i < n; ++i)
+    {
+        const auto& a = polygon[i];
+        const auto& b = polygon[(i + 1) % n];
+
+        Eigen::Vector2d q = closestPointOnSegment(p, a, b);
+
+        double dist2 = (p - q).squaredNorm();
+
+        if (dist2 < min_dist2)
+        {
+            min_dist2 = dist2;
+            closest = q;
+        }
+    }
+
+    return closest;
+}

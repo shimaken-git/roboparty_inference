@@ -150,6 +150,7 @@ void InferenceNode::get_ang_vel_obs(std::vector<float>& segment) {
 void InferenceNode::get_gravity_b_obs(std::vector<float>& segment) {
     quat_buffer_ = robot_->get_quat();
     Eigen::Quaternionf q_b2w(quat_buffer_[0], quat_buffer_[1], quat_buffer_[2], quat_buffer_[3]);
+    q_b2w = imu_correct_quat_ * q_b2w;  // IMUの傾き補正を適用
     Eigen::Vector3f gravity_w(0.0f, 0.0f, -1.0f);
     Eigen::Quaternionf q_w2b = q_b2w.inverse();
     Eigen::Vector3f gravity_b = q_w2b * gravity_w;
@@ -159,9 +160,24 @@ void InferenceNode::get_gravity_b_obs(std::vector<float>& segment) {
         rclcpp::shutdown();
         throw std::runtime_error("Robot fell down");
     }
-    segment[0] = gravity_b.x() * obs_scales_gravity_b_;
-    segment[1] = gravity_b.y() * obs_scales_gravity_b_;
-    segment[2] = gravity_b.z() * obs_scales_gravity_b_;
+
+    // obs_scales_gravity_b_でimuが検出したベクトルの傾きをスケールダウンさせる
+    float x = gravity_b.x() * obs_scales_gravity_b_;
+    float y = gravity_b.y() * obs_scales_gravity_b_;
+
+    // zの符号は元の重力ベクトルと同じにする
+    float z = std::copysign(
+        std::sqrt(std::max(0.0f, 1.0f - x * x - y * y)),
+        gravity_b.z());
+
+    segment[0] = x;
+    segment[1] = y;
+    segment[2] = z;
+
+    //　元のコード、gravity_bのノルムが小さくなると、policyは暴れる。
+    // segment[0] = gravity_b.x() * obs_scales_gravity_b_;
+    // segment[1] = gravity_b.y() * obs_scales_gravity_b_;
+    // segment[2] = gravity_b.z() * obs_scales_gravity_b_;
 }
 
 void InferenceNode::get_cmd_vel_obs(std::vector<float>& segment) {

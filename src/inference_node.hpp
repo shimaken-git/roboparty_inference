@@ -123,6 +123,7 @@ class InferenceNode : public rclcpp::Node {
             setup_model(policy.ctx, policy.model_path,
                         policy.obs_num * policy.frame_stack + policy.extra_obs_num);
         }
+        imu_correction_initialize();
         initialize_runtime_state();
         reset_runtime_state();
 
@@ -222,6 +223,8 @@ class InferenceNode : public rclcpp::Node {
     std::vector<float> act_, last_act_, cmd_vel_, interrupt_action_, perception_obs_buffer_;
     std::vector<float> joint_pos_buffer_, joint_vel_buffer_, joint_torques_buffer_, quat_buffer_, ang_vel_buffer_;
     sensor_msgs::msg::JointState joint_state_msg_, action_msg_;
+    std::vector<double> imu_correction_;
+    Eigen::Quaternionf imu_correct_quat_;
 
     std::ofstream act_file;
 
@@ -237,6 +240,8 @@ class InferenceNode : public rclcpp::Node {
 
     void load_config();
     void setup_model(std::unique_ptr<ModelContext>& ctx, std::string model_path, int input_size);
+
+    void imu_correction_initialize();
 
     // Policy/model runtime helpers.
     void initialize_runtime_state();

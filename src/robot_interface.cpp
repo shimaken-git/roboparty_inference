@@ -30,6 +30,7 @@ RobotInterface::RobotInterface(const std::string& config_file) {
         throw std::runtime_error("Motors configuration not found in " + config_file);
     }
 
+    std::unordered_map<std::string, std::vector<Eigen::Vector2d>> ankle_area;
     robot_cfg_ = std::make_shared<RobotCfg>();
     if (config["robot"]) {
         YAML::Node robot_node = config["robot"];
@@ -66,6 +67,26 @@ RobotInterface::RobotInterface(const std::string& config_file) {
                 close_chain_joint_idx_.push_back(std::distance(robot_cfg_->urdf2motor_.begin(), it));
             }
         }
+        if(robot_node["ankle_area"]){
+            for (const auto& side : robot_node["ankle_area"]){
+                // "left" または "right"
+                std::string name = side.first.as<std::string>();
+                std::vector<Eigen::Vector2d> polygon;
+                for (const auto& p : side.second){
+                    polygon.emplace_back(
+                        p[0].as<double>(),
+                        p[1].as<double>());
+                }
+
+                ankle_area[name] = std::move(polygon);
+            }
+            for (const auto& p : ankle_area["left"]){
+                printf("Left Ankle Area: (%f, %f)\n", p.x(), p.y());
+            }
+            for (const auto& p : ankle_area["right"]){
+                printf("Right Ankle Area: (%f, %f)\n", p.x(), p.y());
+            }
+        }
     } else {
         throw std::runtime_error("Robot configuration not found in " + config_file);
     }
@@ -74,10 +95,17 @@ RobotInterface::RobotInterface(const std::string& config_file) {
 
     ankle_decouple_ = std::make_shared<Decouple>();
 
+    if(ankle_area.size() == 2){
+        std::cout << "Setting ankle angle range..." << std::endl;
+        ankle_decouple_->setAnkleAngleRange(ankle_area["left"], ankle_area["right"]);
+    }
+
     joint_q_ = std::vector<float>(motors_cfg_->motor_id_.size(), 0.0);
     joint_vel_ = std::vector<float>(motors_cfg_->motor_id_.size(), 0.0);
     joint_tau_ = std::vector<float>(motors_cfg_->motor_id_.size(), 0.0);
     motor_target_ = std::vector<float>(motors_cfg_->motor_id_.size(), 0.0);
+
+    current_file_.open("current.csv");
 }
 
 void RobotInterface::setup_motors(){
@@ -114,6 +142,17 @@ void RobotInterface::apply_action(std::vector<float> action) {
                 throw std::runtime_error("Motor id " + std::to_string(motors_cfg_->motor_id_[idx]) + " offline");
             }
         });
+
+        if(current_file_.is_open()){
+            for (size_t i = 0; i < motors_.size(); ++i) {
+                current_file_ << joint_tau_[i];
+                if(i < motors_.size() - 1){
+                    current_file_ << ",";
+                }else{
+                    current_file_ << std::endl;
+                }
+            }
+        }
 
         // 足首駆動　位置司令をトルク司令に変換している
         // テスト用にコメントアウト
@@ -159,7 +198,16 @@ void RobotInterface::apply_action(std::vector<float> action) {
             Eigen::VectorXd q(2), vel(2), tau(2);
             int idx1 = close_chain_joint_idx_[0];
             int idx2 = close_chain_joint_idx_[1];
-            check_ankle_angle(action[idx1], action[idx2], true);
+            // check_ankle_angle(action[idx1], action[idx2], true);
+            Eigen::Vector2d left_ankle_posture(action[idx1], action[idx2]);
+            if(!ankle_decouple_->isInsidePolygon(left_ankle_posture, true)){
+                std::cout << "\033[31mLeft ankle posture is outside the allowed range.\033[0m" << std::endl;
+                Eigen::Vector2d nearest = ankle_decouple_->closestPointOnPolygon(left_ankle_posture, true);
+                std::cout << "Outside\n";
+                std::cout << "Nearest = " << nearest.transpose() << std::endl;
+                action[idx1] = nearest.x();
+                action[idx2] = nearest.y();
+            }
             q << action[idx1], action[idx2];
             ankle_decouple_->get_decoupleQVT(q, vel, tau, true);
             action[idx1] = q[0];
@@ -167,7 +215,16 @@ void RobotInterface::apply_action(std::vector<float> action) {
             
             idx1 = close_chain_joint_idx_[2];
             idx2 = close_chain_joint_idx_[3];
-            check_ankle_angle(action[idx1], action[idx2], false);
+            // check_ankle_angle(action[idx1], action[idx2], false);
+            Eigen::Vector2d right_ankle_posture(action[idx1], action[idx2]);
+            if(!ankle_decouple_->isInsidePolygon(right_ankle_posture, false)){
+                std::cout << "\033[34mRight ankle posture is outside the allowed range.\033[0m" << std::endl;
+                Eigen::Vector2d nearest = ankle_decouple_->closestPointOnPolygon(right_ankle_posture, false);
+                std::cout << "Outside\n";
+                std::cout << "Nearest = " << nearest.transpose() << std::endl;
+                action[idx1] = nearest.x();
+                action[idx2] = nearest.y();
+            }
             q << action[idx1], action[idx2];
             ankle_decouple_->get_decoupleQVT(q, vel, tau, false);
             action[idx1] = q[0];
@@ -224,10 +281,10 @@ void RobotInterface::test_action() {
             motor_target_[i] = joint_q_[motor2urdf_[i]];    // 受信した現在角度をターゲットにする
         }
         // 腕の転写テスト
-        float sign_[5] = {1, -1, -1, 1, -1};
-        for (size_t i = 13; i < 18; i++){
-            motor_target_[i] = motor_target_[i + 5] * sign_[i - 13];
-        }
+        // float sign_[5] = {1, -1, -1, 1, -1};
+        // for (size_t i = 13; i < 18; i++){
+        //     motor_target_[i] = motor_target_[i + 5] * sign_[i - 13];
+        // }
 
         // 足の転写テスト
         // float sign_[6] = {1, -1, -1, 1, 1, 1};
@@ -236,29 +293,48 @@ void RobotInterface::test_action() {
         // }
 
         // 足首テスト
-        // if (!close_chain_joint_idx_.empty()){
-        //     Eigen::VectorXd q(2), vel(2), tau(2);
-        //     int idx1 = close_chain_joint_idx_[0];
-        //     int idx2 = close_chain_joint_idx_[1];
-        //     q << left_ankle_pitch, left_ankle_roll;
-        //     ik_valid = ankle_decouple_->get_decoupleQVT(q, vel, tau, true);
-        //     motor_target_[idx1] = q[0];
-        //     motor_target_[idx2] = q[1];
-        //     // ankle_decouple_->get_forwardQVT(q, vel, tau, true);
-        //     std::cout << "l   pitch: " << left_ankle_pitch << " roll: " << left_ankle_roll << std::endl;
-        //     // std::cout << " fk pitch: " << q[0] << " roll: " << q[1] << std::endl;
-        //     idx1 = close_chain_joint_idx_[2];
-        //     idx2 = close_chain_joint_idx_[3];
-        //     q << right_ankle_pitch, right_ankle_roll;
-        //     vel << 0, 0;
-        //     tau << 0, 0;
-        //     ik_valid = ik_valid && ankle_decouple_->get_decoupleQVT(q, vel, tau, false);
-        //     motor_target_[idx1] = q[0];
-        //     motor_target_[idx2] = q[1];
-        //     // ankle_decouple_->get_forwardQVT(q, vel, tau, false);
-        //     std::cout << "r   pitch: " << right_ankle_pitch << " roll: " << right_ankle_roll << std::endl;
-        //     // std::cout << " fk pitch: " << q[0] << " roll: " << q[1] << std::endl;
-        // }
+        if (!close_chain_joint_idx_.empty()){
+            Eigen::VectorXd q(2), vel(2), tau(2);
+            Eigen::Vector2d left_ankle_posture(left_ankle_pitch, left_ankle_roll);
+            if(!ankle_decouple_->isInsidePolygon(left_ankle_posture, true)){
+                std::cout << "\033[31mLeft ankle posture is outside the allowed range.\033[0m" << std::endl;
+                Eigen::Vector2d nearest = ankle_decouple_->closestPointOnPolygon(left_ankle_posture, true);
+                std::cout << "Outside\n";
+                std::cout << "Nearest = " << nearest.transpose() << std::endl;
+                left_ankle_pitch = nearest.x();
+                left_ankle_roll = nearest.y();
+            }
+            int idx1 = close_chain_joint_idx_[0];
+            int idx2 = close_chain_joint_idx_[1];
+            q << left_ankle_pitch, left_ankle_roll;
+            ik_valid = ankle_decouple_->get_decoupleQVT(q, vel, tau, true);
+            motor_target_[idx1] = q[0];
+            motor_target_[idx2] = q[1];
+            // ankle_decouple_->get_forwardQVT(q, vel, tau, true);
+            std::cout << "l   pitch: " << left_ankle_pitch << " roll: " << left_ankle_roll << std::endl;
+            // std::cout << " fk pitch: " << q[0] << " roll: " << q[1] << std::endl;
+
+            Eigen::Vector2d right_ankle_posture(right_ankle_pitch, right_ankle_roll);
+            if(!ankle_decouple_->isInsidePolygon(right_ankle_posture, false)){
+                std::cout << "\033[34mRight ankle posture is outside the allowed range.\033[0m" << std::endl;
+                Eigen::Vector2d nearest = ankle_decouple_->closestPointOnPolygon(right_ankle_posture, false);
+                std::cout << "Outside\n";
+                std::cout << "Nearest = " << nearest.transpose() << std::endl;
+                right_ankle_pitch = nearest.x();
+                right_ankle_roll = nearest.y();
+            }
+            idx1 = close_chain_joint_idx_[2];
+            idx2 = close_chain_joint_idx_[3];
+            q << right_ankle_pitch, right_ankle_roll;
+            vel << 0, 0;
+            tau << 0, 0;
+            ik_valid = ik_valid && ankle_decouple_->get_decoupleQVT(q, vel, tau, false);
+            motor_target_[idx1] = q[0];
+            motor_target_[idx2] = q[1];
+            // ankle_decouple_->get_forwardQVT(q, vel, tau, false);
+            std::cout << "r   pitch: " << right_ankle_pitch << " roll: " << right_ankle_roll << std::endl;
+            // std::cout << " fk pitch: " << q[0] << " roll: " << q[1] << std::endl;
+        }
         //足首roll/pitch モニター
         check_motors_angle();
         if (!close_chain_joint_idx_.empty()){
@@ -314,13 +390,20 @@ void RobotInterface::reset_joints(std::vector<double> joint_default_angle) {
         }
     }
 
-    float dev_ = 5.0;
+    constexpr float kUpdatePeriod = 0.1f;   // 100 ms
+    constexpr float kRampTime     = 2.0f;   // 2 秒
+    // 最大Kpを取得
+    float max_kp = *std::max_element(robot_cfg_->kp_.begin(), robot_cfg_->kp_.end());
+    // 最大Kpの初期値が20になるような除数
+    float dev_ = std::max(1.0f, max_kp / 20.0f);
+    float dev_step = (dev_ - 1.0f) * kUpdatePeriod / kRampTime;
     while(dev_ >= 1.0){
         exec_motors_parallel([this, &dev_](std::shared_ptr<MotorDriver>& motor, int idx) {
             motor->motor_mit_cmd(motor_target_[idx] * robot_cfg_->motor_sign_[idx], 0.0f, robot_cfg_->kp_[idx]/dev_, robot_cfg_->kd_[idx], 0.0f);
         });
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        dev_ -= 0.2;
+        dev_ -= dev_step;
+        std::cout << "dev_ = " << dev_ << std::endl;
     }
 }
 

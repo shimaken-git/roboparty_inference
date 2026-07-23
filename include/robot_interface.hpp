@@ -31,6 +31,9 @@ class RobotInterface {
         if (outputfile_.is_open()) {
             outputfile_.close();
         }
+        if (current_file_.is_open()) {
+            current_file_.close();
+        }
     }
     struct IMUCfg{
         int imu_id_, baudrate_;
@@ -128,6 +131,7 @@ class RobotInterface {
     std::vector<double> joint_limits_;
 
     std::ofstream outputfile_;
+    std::ofstream current_file_;
 
     void setup_motors();
     void setup_imu();

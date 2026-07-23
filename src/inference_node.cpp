@@ -350,6 +350,13 @@ void InferenceNode::inference() {
     }
 }
 
+void InferenceNode::imu_correction_initialize() {
+    imu_correct_quat_ = Eigen::Quaternionf::Identity();
+    Eigen::AngleAxisf roll_correction(imu_correction_[0], Eigen::Vector3f::UnitX());
+    Eigen::AngleAxisf pitch_correction(imu_correction_[1], Eigen::Vector3f::UnitY());
+    imu_correct_quat_ = roll_correction * pitch_correction;
+}
+
 int main(int argc, char **argv) {
     rclcpp::init(argc, argv);
     if (mlockall(MCL_CURRENT | MCL_FUTURE) == -1) {
