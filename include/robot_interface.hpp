@@ -28,11 +28,11 @@ class RobotInterface {
         deinit_motors();
         motors_.clear();
         imu_.reset();
-        if (outputfile_.is_open()) {
-            outputfile_.close();
+        if (motorpos_file_.is_open()) {
+            motorpos_file_.close();
         }
-        if (current_file_.is_open()) {
-            current_file_.close();
+        if (motorcur_file_.is_open()) {
+            motorcur_file_.close();
         }
     }
     struct IMUCfg{
@@ -130,8 +130,8 @@ class RobotInterface {
 
     std::vector<double> joint_limits_;
 
-    std::ofstream outputfile_;
-    std::ofstream current_file_;
+    std::ofstream motorpos_file_;
+    std::ofstream motorcur_file_;
 
     void setup_motors();
     void setup_imu();

@@ -120,10 +120,14 @@ void InferenceNode::reset_runtime_state() {
     is_interrupt_.store(false);
     is_motion_policy_.store(false);
     is_test_.store(false);
+    is_teleop_.store(false);
     active_policy_idx_ = 0;
+    mixing_ratio = 0.0f;
+    mixing_switch_period = 0.01f;
     {
         std::unique_lock<std::mutex> lock(cmd_mutex_);
         std::fill(cmd_vel_.begin(), cmd_vel_.end(), 0.0f);
+        std::fill(last_cmd_vel_.begin(), last_cmd_vel_.end(), 0.0f);
     }
     {
         std::unique_lock<std::mutex> lock(perception_mutex_);
@@ -174,6 +178,7 @@ void InferenceNode::initialize_runtime_state() {
     }
 
     cmd_vel_.assign(3, 0.0f);
+    last_cmd_vel_.assign(3, 0.0f);
     act_.assign(joint_num_, 0.0f);
     last_act_.assign(joint_num_, 0.0f);
     joint_pos_buffer_.assign(joint_num_, 0.0f);
@@ -181,6 +186,7 @@ void InferenceNode::initialize_runtime_state() {
     joint_torques_buffer_.assign(joint_num_, 0.0f);
     quat_buffer_.assign(4, 0.0f);
     ang_vel_buffer_.assign(3, 0.0f);
+    teleop_action_.assign(10, 0.0f);
     if (has_obs_source("perception")) {
         perception_obs_buffer_.assign(perception_obs_num_, 0.0f);
     } else {
@@ -292,6 +298,16 @@ void InferenceNode::inference() {
                 return std::clamp(val, -clip_observations_, clip_observations_);
             });
 
+            if(obs_file.is_open()){
+                for(int i = 0; i < policy.obs.size(); i++){
+                    if(i < policy.obs.size() - 1){
+                        obs_file << policy.obs[i] << ",";
+                    }else{
+                        obs_file << policy.obs[i] << std::endl;
+                    }
+                }
+            }
+
             update_stacked_obs(policy.ctx->input_buffer, policy.obs, policy.obs_num, policy.frame_stack,
                                policy.stack_order, policy.obs_layout_sizes, policy.is_first_frame);
             if(policy.extra_obs_num > 0){
@@ -313,21 +329,67 @@ void InferenceNode::inference() {
                     policy.ctx->output_buffer[i] = std::clamp(policy.ctx->output_buffer[i], -clip_actions_, clip_actions_);
                     act_[usd2urdf_[i]] = policy.ctx->output_buffer[i];
                     act_[usd2urdf_[i]] = act_[usd2urdf_[i]] * action_scale_ + joint_default_angle_[usd2urdf_[i]];
-                    if(act_file.is_open()){
-                        act_file << act_[usd2urdf_[i]];
-                        if(i < policy.ctx->output_buffer.size() - 1){
-                            act_file << ",";
+                }
+                if(act_file.is_open()){
+                    for(int i = 0; i < act_.size(); i++){
+                        if(i < act_.size() - 1){
+                            act_file << act_[i] << ",";
                         }else{
-                            act_file << std::endl;
+                            act_file << act_[i] << std::endl;
                         }
                     }
                 }
-                if(supports_interrupt() && is_interrupt_.load()){
+                // if(supports_interrupt() && is_interrupt_.load()){
+                //     std::unique_lock<std::mutex> lock(interrupt_mutex_);
+                //     for (size_t i = 0; i < interrupt_action_.size(); i++) {
+                //         act_[act_.size() - interrupt_action_.size() + i] = interrupt_action_[i];
+                //     }
+                // }
+                if(supports_interrupt()){
                     std::unique_lock<std::mutex> lock(interrupt_mutex_);
+                    if(is_interrupt_.load()){
+                        if(mixing_ratio < 1.0){
+                            mixing_ratio += mixing_switch_period;
+                            std::cout << "mixing_ratio: " << mixing_ratio << std::endl;
+                            if(mixing_ratio > 1.0){
+                                mixing_ratio = 1.0;
+                            }
+                        }
+                    }else{
+                        if(mixing_ratio > 0.0){
+                            mixing_ratio -= mixing_switch_period;
+                            std::cout << "mixing_ratio: " << mixing_ratio << std::endl;
+                            if(mixing_ratio < 0.0){
+                                mixing_ratio = 0.0;
+                            }
+                        }
+                    }
                     for (size_t i = 0; i < interrupt_action_.size(); i++) {
-                        act_[act_.size() - interrupt_action_.size() + i] = interrupt_action_[i];
+                        act_[act_.size() - interrupt_action_.size() + i] = act_[act_.size() - interrupt_action_.size() + i] * (1.0 - mixing_ratio) + interrupt_action_[i] * mixing_ratio;
                     }
                 }
+                //ノーマルポリシーで割り込みさせるケース
+                // {
+                //     std::unique_lock<std::mutex> lock(teleop_mutex_);
+                //     if(is_teleop_.load()){
+                //         if(mixing_ratio < 1.0){
+                //             mixing_ratio += mixing_switch_period;
+                //             if(mixing_ratio > 1.0){
+                //                 mixing_ratio = 1.0;
+                //             }
+                //         }
+                //     }else{
+                //         if(mixing_ratio > 0.0){
+                //             mixing_ratio -= mixing_switch_period;
+                //             if(mixing_ratio < 0.0){
+                //                 mixing_ratio = 0.0;
+                //             }
+                //         }
+                //     }
+                //     for (size_t i = 0; i < teleop_action_.size(); i++) {
+                //         act_[act_.size() - teleop_action_.size() + i] = act_[act_.size() - teleop_action_.size() + i] * (1.0 - mixing_ratio) + teleop_action_[i] * mixing_ratio;
+                //     }
+                // }
                 publish_action();
             }
         } catch (const std::exception& e) {

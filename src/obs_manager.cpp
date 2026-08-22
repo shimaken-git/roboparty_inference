@@ -92,6 +92,46 @@ std::vector<ObsSourceSpec> InferenceNode::parse_obs_layout(
     return layout;
 }
 
+float filter_cmd_vel(float target, float current, float max_delta_at_zero, float max_delta_at_far, float max_cmd_vel)
+{
+    // ゼロへ近づく場合だけフィルタ
+    if (std::abs(target) < std::abs(current)) {
+
+        // 現在値がゼロからどれだけ離れているか
+        float t = std::min(
+            std::abs(current) / max_cmd_vel,
+            1.0f
+        );
+
+        // ゼロ付近では速く、
+        // ゼロから離れるほど遅くする
+        float max_delta =
+            max_delta_at_zero +
+            (max_delta_at_far - max_delta_at_zero) * t;
+
+        float delta = target - current;
+
+        if (std::abs(delta) <= max_delta) {
+            return target;
+        }
+
+        return current + std::copysign(max_delta, delta);
+    }
+
+    // ゼロから離れる方向は即座に追従
+    return target;
+}
+
+// dead zoneを適用する関数
+float apply_deadzone(float x, float dead_zone)
+{
+    if (std::abs(x) <= dead_zone) {
+        return 0.0f;
+    }
+
+    return std::copysign(std::abs(x) - dead_zone, x);
+}
+
 bool InferenceNode::has_obs_source(const std::string& source_name) const {
     return std::any_of(policies_.begin(), policies_.end(), [this, &source_name](const PolicyRuntime& policy) {
         const auto source_matches = [&source_name](const ObsSourceSpec& spec) {
@@ -182,15 +222,38 @@ void InferenceNode::get_gravity_b_obs(std::vector<float>& segment) {
 
 void InferenceNode::get_cmd_vel_obs(std::vector<float>& segment) {
     std::unique_lock<std::mutex> lock(cmd_mutex_);
+    // cmv_velの急変を抑えるフィルター。イマイチなのでコメントアウト
+    // for (int i = 0; i < 3; i++) {
+    //     cmd_vel_[i] = filter_cmd_vel(cmd_vel_[i], last_cmd_vel_[i], 0.05f, 0.01f, 0.5f);
+    //     last_cmd_vel_[i] = cmd_vel_[i];
+    // }
     segment[0] = cmd_vel_[0] * obs_scales_lin_vel_;
     segment[1] = cmd_vel_[1] * obs_scales_lin_vel_;
     segment[2] = cmd_vel_[2] * obs_scales_ang_vel_;
 }
 
 void InferenceNode::get_dof_pos_obs(std::vector<float>& segment) {
+    // static bool first_call = true;
     joint_pos_buffer_ = robot_->get_joint_q();
     for (int i = 0; i < joint_num_; i++) {
-        segment[i] = (joint_pos_buffer_[usd2urdf_[i]] - joint_default_angle_[usd2urdf_[i]]) * obs_scales_dof_pos_;
+        if(i == 19 || i == 20){
+            segment[i] = (joint_pos_buffer_[usd2urdf_[i]] - joint_default_angle_[usd2urdf_[i]]) * obs_scales_dof_pos_ * 0.5;
+            segment[i] = apply_deadzone(segment[i], dead_zone_);
+        }else{
+            segment[i] = (joint_pos_buffer_[usd2urdf_[i]] - joint_default_angle_[usd2urdf_[i]]) * obs_scales_dof_pos_;
+        }
+    }
+    //足首ロールのobsをゼロにしてみる。足首ロールの状態で股関節ロールが反応してしまう。
+    // std::cout << "ankle_roll " << segment[19] << ", " << segment[20] << std::endl;
+    // if(first_call){
+    //     segment[19] = 0.0;
+    //     segment[20] = 0.0;
+    //     first_call = false;
+    // }
+    if(is_teleop_.load()){
+        for (size_t i = 0; i < teleop_action_.size(); i++) {
+            segment[segment.size() - teleop_action_.size() + i] = 0.0f;
+        }
     }
     for(size_t i = 0; i < joint_limits_.size() / 2; i++){
         if(joint_pos_buffer_[i] < joint_limits_[i * 2] || joint_pos_buffer_[i] > joint_limits_[i * 2 + 1]){

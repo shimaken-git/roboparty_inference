@@ -8,6 +8,7 @@ void InferenceNode::load_config() {
     this->declare_parameter<std::vector<long int>>("frame_stacks", std::vector<long int>{});
     this->declare_parameter<std::vector<std::string>>("obs_stack_orders", std::vector<std::string>{});
     this->declare_parameter<float>("act_alpha", 0.9);
+    this->declare_parameter<float>("cmd_alpha", 1.0);
     this->declare_parameter<int>("intra_threads", -1);
     this->declare_parameter<std::string>("perception_obs_topic", "elevation_data");
     this->declare_parameter<int>("joint_num", 23);
@@ -20,6 +21,7 @@ void InferenceNode::load_config() {
     this->declare_parameter<float>("obs_scales_gravity_b", 1.0);
     this->declare_parameter<float>("clip_observations", 100.0);
     this->declare_parameter<float>("action_scale", 0.3);
+    this->declare_parameter<float>("dead_zone", 0.02);
     this->declare_parameter<float>("clip_actions", 18.0);
     this->declare_parameter<std::vector<long int>>("usd2urdf", std::vector<long int>{});
     this->declare_parameter<std::vector<double>>("clip_cmd", std::vector<double>{});
@@ -40,6 +42,7 @@ void InferenceNode::load_config() {
     this->get_parameter("frame_stacks", frame_stacks);
     this->get_parameter("obs_stack_orders", obs_stack_orders);
     this->get_parameter("act_alpha", act_alpha_);
+    this->get_parameter("cmd_alpha", cmd_alpha_);
     this->get_parameter("intra_threads", intra_threads_);
     this->get_parameter("perception_obs_topic", perception_obs_topic_);
     this->get_parameter("joint_num", joint_num_);
@@ -52,6 +55,7 @@ void InferenceNode::load_config() {
     this->get_parameter("obs_scales_gravity_b", obs_scales_gravity_b_);
     this->get_parameter("clip_observations", clip_observations_);
     this->get_parameter("action_scale", action_scale_);
+    this->get_parameter("dead_zone", dead_zone_);
     this->get_parameter("clip_actions", clip_actions_);
     this->get_parameter("usd2urdf", usd2urdf_);
     this->get_parameter("clip_cmd", clip_cmd_);
@@ -136,6 +140,7 @@ void InferenceNode::load_config() {
         }
     }
     RCLCPP_INFO(this->get_logger(), "act_alpha: %f", act_alpha_);
+    RCLCPP_INFO(this->get_logger(), "cmd_alpha: %f", cmd_alpha_);
     RCLCPP_INFO(this->get_logger(), "intra_threads: %d", intra_threads_);
     RCLCPP_INFO(this->get_logger(), "supports_interrupt: %s", has_obs_source("interrupt") ? "true" : "false");
     RCLCPP_INFO(this->get_logger(), "has_motion_policy: %s", motion_policy_indices_.empty() ? "false" : "true");
@@ -152,6 +157,7 @@ void InferenceNode::load_config() {
     RCLCPP_INFO(this->get_logger(), "obs_scales_gravity_b: %f", obs_scales_gravity_b_);
     RCLCPP_INFO(this->get_logger(), "action_scale: %f", action_scale_);
     RCLCPP_INFO(this->get_logger(), "clip_actions: %f", clip_actions_);
+    RCLCPP_INFO(this->get_logger(), "dead_zone: %f", dead_zone_);
     print_vector<long int>("usd2urdf", usd2urdf_);
     print_vector<double>("clip_cmd", clip_cmd_);
     print_vector<double>("joint_default_angle", joint_default_angle_);
@@ -196,8 +202,10 @@ void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Jo
         RCLCPP_INFO(this->get_logger(), "Inference %s", is_running_.load() ? "started" : "paused");
     }
     if (msg->buttons[8] == 1 && msg->buttons[8] != last_button3_) {  //Xbox:Y PS4:share  joy or cmd_vel
-        is_joy_control_.store(!is_joy_control_);
-        RCLCPP_INFO(this->get_logger(), "Controlled by %s", is_joy_control_.load() ? "joy" : "/cmd_vel");
+        // is_joy_control_.store(!is_joy_control_);
+        // RCLCPP_INFO(this->get_logger(), "Controlled by %s", is_joy_control_.load() ? "joy" : "/cmd_vel");
+        is_teleop_.store(!is_teleop_);
+        RCLCPP_INFO(this->get_logger(), "TELEOP MODE %s", is_teleop_.load() ? "ON" : "OFF");
     }
     if (msg->buttons[4] == 1 && msg->buttons[4] != last_button6_) {  //PS4:L1  test mode
         is_test_.store(!is_test_);
@@ -295,6 +303,12 @@ void InferenceNode::subs_joint_state_callback(const std::shared_ptr<sensor_msgs:
         std::unique_lock<std::mutex> lock(interrupt_mutex_);
         for(size_t i = 0; i < interrupt_action_.size(); i++){
             interrupt_action_[i] = msg->position[i];
+        }
+    }else if(is_teleop_.load()){
+        std::unique_lock<std::mutex> lock(teleop_mutex_);
+        for(size_t i = 0; i < msg->position.size(); i++){
+            teleop_action_[i] = msg->position[i];
+            // RCLCPP_INFO(this->get_logger(), "Joint %zu: %s %f", i, msg->name[i].c_str(), msg->position[i]);
         }
     }
 }
