@@ -303,12 +303,12 @@ void InferenceNode::subs_joint_state_callback(const std::shared_ptr<sensor_msgs:
         std::unique_lock<std::mutex> lock(interrupt_mutex_);
         for(size_t i = 0; i < interrupt_action_.size(); i++){
             interrupt_action_[i] = msg->position[i];
+            // RCLCPP_INFO(this->get_logger(), "Joint %zu: %s %f", i, msg->name[i].c_str(), msg->position[i]);
         }
     }else if(is_teleop_.load()){
         std::unique_lock<std::mutex> lock(teleop_mutex_);
         for(size_t i = 0; i < msg->position.size(); i++){
             teleop_action_[i] = msg->position[i];
-            // RCLCPP_INFO(this->get_logger(), "Joint %zu: %s %f", i, msg->name[i].c_str(), msg->position[i]);
         }
     }
 }

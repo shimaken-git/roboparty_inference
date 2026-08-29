@@ -257,8 +257,12 @@ void InferenceNode::get_dof_pos_obs(std::vector<float>& segment) {
     }
     for(size_t i = 0; i < joint_limits_.size() / 2; i++){
         if(joint_pos_buffer_[i] < joint_limits_[i * 2] || joint_pos_buffer_[i] > joint_limits_[i * 2 + 1]){
-            RCLCPP_FATAL(this->get_logger(), "Joint %zu out of limit! Shutting down...", i+1);
-            rclcpp::shutdown();
+            // RCLCPP_FATAL(this->get_logger(), "Joint %zu %f out of limit! Shutting down...", i+1, joint_pos_buffer_[i]);
+            RCLCPP_FATAL(this->get_logger(), "Joint %zu %f out of limit! Stop Inference!", i+1, joint_pos_buffer_[i]);
+            if(is_running_.load()){
+                is_running_.store(false);
+            }
+            // rclcpp::shutdown();
             throw std::runtime_error("Joint out of limit");
         }
     }
