@@ -233,22 +233,15 @@ void InferenceNode::get_cmd_vel_obs(std::vector<float>& segment) {
 }
 
 void InferenceNode::get_dof_pos_obs(std::vector<float>& segment) {
-    // static bool first_call = true;
     joint_pos_buffer_ = robot_->get_joint_q();
-    for (int i = 0; i < joint_num_; i++) {
-        if(i == 19 || i == 20){
-            segment[i] = (joint_pos_buffer_[usd2urdf_[i]] - joint_default_angle_[usd2urdf_[i]]) * obs_scales_dof_pos_ * 0.5;
-            segment[i] = apply_deadzone(segment[i], dead_zone_);
-        }else{
-            segment[i] = (joint_pos_buffer_[usd2urdf_[i]] - joint_default_angle_[usd2urdf_[i]]) * obs_scales_dof_pos_;
-        }
-    }
-    //足首ロールのobsをゼロにしてみる。足首ロールの状態で股関節ロールが反応してしまう。
-    // std::cout << "ankle_roll " << segment[19] << ", " << segment[20] << std::endl;
-    // if(first_call){
-    //     segment[19] = 0.0;
-    //     segment[20] = 0.0;
-    //     first_call = false;
+    //足首ロールだけobs_scalesを小さくする。さらに、デッドゾーンを設ける
+    // for (int i = 0; i < joint_num_; i++) {
+    //     if(i == 19 || i == 20){
+    //         segment[i] = (joint_pos_buffer_[usd2urdf_[i]] - joint_default_angle_[usd2urdf_[i]]) * obs_scales_dof_pos_ * 0.5;
+    //         segment[i] = apply_deadzone(segment[i], dead_zone_);
+    //     }else{
+    //         segment[i] = (joint_pos_buffer_[usd2urdf_[i]] - joint_default_angle_[usd2urdf_[i]]) * obs_scales_dof_pos_;
+    //     }
     // }
     if(is_teleop_.load()){
         for (size_t i = 0; i < teleop_action_.size(); i++) {
