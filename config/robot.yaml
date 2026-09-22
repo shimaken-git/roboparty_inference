@@ -101,3 +101,5 @@ robot:
     ankle_link:
         [0.165, 0.095,  #left
          0.165, 0.095]  #right
+
+    quit_mode: true    # true: 終了時、deinit_motorsを呼ばない　false: deinit_motorsを呼ぶ

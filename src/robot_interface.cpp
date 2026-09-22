@@ -40,6 +40,7 @@ RobotInterface::RobotInterface(const std::string& config_file) {
         if (robot_node["motor_sign"]) robot_cfg_->motor_sign_ = robot_node["motor_sign"].as<std::vector<long int>>();
         if (robot_node["urdf2motor"]) robot_cfg_->urdf2motor_ = robot_node["urdf2motor"].as<std::vector<long int>>();
         if (robot_node["ankle_limit"]) robot_cfg_->ankle_limit_ = robot_node["ankle_limit"].as<std::vector<double>>();
+        if (robot_node["quit_mode"]) robot_cfg_->quit_mode_ = robot_node["quit_mode"].as<bool>();
         motor2urdf_ = std::vector<int>(motors_cfg_->motor_id_.size(), -1);
         for (size_t i = 0; i < robot_cfg_->urdf2motor_.size(); ++i) {
             motor2urdf_[robot_cfg_->urdf2motor_[i]] = i;
@@ -403,8 +404,7 @@ void RobotInterface::reset_joints(std::vector<double> joint_default_angle) {
     constexpr float kRampTime     = 2.0f;   // 2 秒
     // 最大Kpを取得
     float max_kp = *std::max_element(robot_cfg_->kp_.begin(), robot_cfg_->kp_.end());
-    // 最大Kpの初期値が20になるような除数
-    float dev_ = std::max(1.0f, max_kp / 20.0f);
+    float dev_ = std::max(1.0f, max_kp / 20.0f);    // 最大Kpの初期値が20になるような除数
     float dev_step = (dev_ - 1.0f) * kUpdatePeriod / kRampTime;
     while(dev_ >= 1.0){
         exec_motors_parallel([this, &dev_](std::shared_ptr<MotorDriver>& motor, int idx) {
@@ -416,6 +416,34 @@ void RobotInterface::reset_joints(std::vector<double> joint_default_angle) {
     }
 }
 
+void RobotInterface::relax_joints() {
+    refresh_joints();
+    std::vector<double> joint_angle(joint_q_.size());
+    std::copy(joint_q_.begin(), joint_q_.end(), joint_angle.begin());
+    if (!close_chain_joint_idx_.empty()){
+        Eigen::VectorXd q(2), vel(2), tau(2);
+        int idx1 = close_chain_joint_idx_[0];
+        int idx2 = close_chain_joint_idx_[1];
+        q << joint_angle[idx1], joint_angle[idx2];
+        ankle_decouple_->get_decoupleQVT(q, vel, tau, true);
+        joint_angle[idx1] = q[0];
+        joint_angle[idx2] = q[1];
+
+        idx1 = close_chain_joint_idx_[2];
+        idx2 = close_chain_joint_idx_[3];
+        q << joint_angle[idx1], joint_angle[idx2];
+        ankle_decouple_->get_decoupleQVT(q, vel, tau, false);
+        joint_angle[idx1] = q[0];
+        joint_angle[idx2] = q[1];
+    }
+    float max_kp = *std::max_element(robot_cfg_->kp_.begin(), robot_cfg_->kp_.end());
+    float dev_ = std::max(1.0f, max_kp / 20.0f);    // 最大Kpの初期値が20になるような除数
+    exec_motors_parallel([this, &joint_angle, &dev_](std::shared_ptr<MotorDriver>& motor, int idx) {
+        motor->motor_mit_cmd(joint_angle[idx] * robot_cfg_->motor_sign_[idx], 0.0f, robot_cfg_->kp_[idx]/dev_, robot_cfg_->kd_[idx], 0.0f);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+}
+
 void RobotInterface::refresh_joints() {
     {
         std::unique_lock<std::mutex> lock(joint_mutex_);
@@ -423,7 +451,7 @@ void RobotInterface::refresh_joints() {
             motor->refresh_motor_status();
         });
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         exec_motors_parallel([this](std::shared_ptr<MotorDriver>& motor, int idx) {
             joint_q_[motor2urdf_[idx]] = motor->get_motor_pos() * robot_cfg_->motor_sign_[idx];
@@ -482,6 +510,7 @@ void RobotInterface::init_motors() {
 }
 
 void RobotInterface::deinit_motors() {
+    relax_joints();
     exec_motors_parallel([](std::shared_ptr<MotorDriver>& motor, int idx) {
         motor->deinit_motor();
     });

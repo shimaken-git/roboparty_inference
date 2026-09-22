@@ -25,7 +25,11 @@ class RobotInterface {
    public:
     RobotInterface(const std::string& config_file);
     ~RobotInterface() {
-        deinit_motors();
+        if(robot_cfg_->quit_mode_){
+            relax_joints();  //モーターのトルクが入っていなければmit_cmdを送っても無視される
+        }else{
+            deinit_motors();
+        }
         motors_.clear();
         imu_.reset();
         if (motorpos_file_.is_open()) {
@@ -51,6 +55,7 @@ class RobotInterface {
         std::vector<long int> close_chain_motor_id_, motor_sign_, urdf2motor_;
         std::vector<double> ankle_limit_;
         std::vector<double> kp_, kd_, extrinsic_R_;
+        bool quit_mode_ = false;  // true: deinit_motorsを呼ばない　false: deinit_motorsを呼ぶ
     };
 
     void apply_action(std::vector<float> action);
@@ -61,6 +66,7 @@ class RobotInterface {
     void set_zeros();
     void clear_errors();
     void refresh_joints();
+    void relax_joints();
     std::vector<float> get_joint_q() {
         if (!is_init_.load()) {
             throw std::runtime_error("Motors not initialized");

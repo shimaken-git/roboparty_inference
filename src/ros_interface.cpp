@@ -265,9 +265,23 @@ void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Jo
         }
         last_button5_ = msg->buttons[0];
     }
-    if(msg->buttons[5] == 1 && msg->buttons[5] != last_button7_ && msg->axes[7] == -1){     // R1　+ ⇧　　Error reset
+    if(msg->buttons[5] == 1 && msg->buttons[5] != last_button7_ && msg->axes[7] == -1){     // R1　+ ⇩　　Error reset
         robot_->clear_errors();
         std::cout << "Clear motor errors." << std::endl;
+    }
+    if(msg->buttons[5] == 1 && msg->buttons[5] != last_button7_ && msg->axes[7] == 1){     // R1　+ ⇧　　refresh motors
+        try {
+            robot_->refresh_joints();
+            for (size_t i = 0; i < robot_->get_joint_q().size(); ++i) {
+                RCLCPP_INFO(this->get_logger(), "Joint %zu: pos=%f, vel=%f, tau=%f", i,
+                            robot_->get_joint_q()[i],
+                            robot_->get_joint_vel()[i],
+                            robot_->get_joint_tau()[i]);
+            }
+
+        } catch (const std::exception& e) {
+            RCLCPP_FATAL(this->get_logger(), "Exception in refresh_joints: %s", e.what());
+        }
     }
     last_button0_ = msg->buttons[9];
     last_button1_ = msg->buttons[10];
