@@ -1,9 +1,12 @@
 inference_node:
     ros__parameters:
-        model_names: ["policy_flat7.onnx"]  # policy_flat2.onnx frictionを変更したモデル　policy_flat3.onnx dynamic_frictionを変更したモデル policy_flat4.onnx BAMによるパラメータを反映したモデル
+        model_names: ["policy_flat8.onnx"]  # policy_flat2.onnx frictionを変更したモデル
+                                            # policy_flat3.onnx dynamic_frictionを変更したモデル
+                                            # policy_flat4.onnx BAMによるパラメータを反映したモデル
                                             # policy_flat5.onnx 足首モーターをアセンブリ状態でBAM推定したもの
                                             # policy_flat6.onnx 更にratioを反映したもの。
                                             # policy_flat7.onnx gravity_bをランダム遅延させたもの モーターモデルはdm4340BAMモデル
+                                            # policy_flat8.onnx 2026-10-30_09-05-47
         obs_layouts:
           - "ang_vel:3, gravity_b:3, cmd_vel:3, dof_pos:23, dof_vel:23, last_action:23"
         frame_stacks: [10]
