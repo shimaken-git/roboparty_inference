@@ -1,6 +1,6 @@
 inference_node:
     ros__parameters:
-        model_names: ["policy_flat13.onnx"]  # policy_flat2.onnx frictionを変更したモデル
+        model_names: ["policy_flat15.onnx"]  # policy_flat2.onnx frictionを変更したモデル
                                             # policy_flat3.onnx dynamic_frictionを変更したモデル
                                             # policy_flat4.onnx BAMによるパラメータを反映したモデル
                                             # policy_flat5.onnx 足首モーターをアセンブリ状態でBAM推定したもの
@@ -12,7 +12,8 @@ inference_node:
                                             # policy_flat11.onnx 2026-11-09_00-20-43 DR1 projected_gravity noise normalize
                                             # policy_flat12.onnx 2026-11-09_08-40-55 DR1 projected_gravity noise normalize parameter 0.05->0.1
                                             # policy_flat13.onnx 2026-11-10_00-39-14 DR1 projected_gravity noise normalize parameter 0.05->0.2
-                                            # policy_flat14.onnx 2026-11-10_09-00-36 DR1 hips kp/kd noise(0.85, 1.15) projected_gravity noise normalize parameter 0.05
+                                            # policy_flat14.onnx 2026-11-10_09-00-36 DR1 hips kp/kd noise(0.85, 1.15) projected_gravity noise normalize parameter 0.2
+                                            # policy_flat15.onnx 2026-11-11_08-38-54 DR1 hips kp/kd noise(0.85, 1.15) ankle kp/kd noise(0.9, 1.1) projected_gravity noise normalize parameter 0.1
         obs_layouts:
           - "ang_vel:3, gravity_b:3, cmd_vel:3, dof_pos:23, dof_vel:23, last_action:23"
         frame_stacks: [10]
