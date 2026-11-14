@@ -305,11 +305,11 @@ void InferenceNode::inference() {
                     obs_file << tm << ",";
                 }
                 for(int i = 0; i < policy.obs.size(); i++){
-                    if(i < policy.obs.size() - 1){
+                    // if(i < policy.obs.size() - 1){
                         obs_file << policy.obs[i] << ",";
-                    }else{
-                        obs_file << policy.obs[i] << std::endl;
-                    }
+                    // }else{
+                        // obs_file << policy.obs[i] << std::endl;
+                    // }
                 }
             }
 
@@ -324,10 +324,16 @@ void InferenceNode::inference() {
             }
             policy.is_first_frame = false;
 
+            auto start_time = monotonic_ns();
+
             policy.ctx->session->Run(Ort::RunOptions{nullptr},
                 policy.ctx->input_names_raw.data(), policy.ctx->input_tensor.get(), policy.ctx->num_inputs,
                 policy.ctx->output_names_raw.data(), policy.ctx->output_tensor.get(), policy.ctx->num_outputs);
 
+            auto end_time = monotonic_ns();
+            if(obs_file.is_open()){
+            } 
+                obs_file << start_time << "," << end_time << std::endl;
             {
                 std::unique_lock<std::mutex> lock(act_mutex_);
                 for (int i = 0; i < policy.ctx->output_buffer.size(); i++) {
@@ -460,4 +466,13 @@ int main(int argc, char **argv) {
     rclcpp::shutdown();
     node.reset();
     return 0;
+}
+
+uint64_t InferenceNode::monotonic_ns()
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL
+         + static_cast<uint64_t>(ts.tv_nsec);
 }

@@ -104,6 +104,7 @@ RobotInterface::RobotInterface(const std::string& config_file) {
     joint_q_ = std::vector<float>(motors_cfg_->motor_id_.size(), 0.0);
     joint_vel_ = std::vector<float>(motors_cfg_->motor_id_.size(), 0.0);
     joint_tau_ = std::vector<float>(motors_cfg_->motor_id_.size(), 0.0);
+    joint_time_ = std::vector<uint64_t>(motors_cfg_->motor_id_.size(), 0);
     motor_target_ = std::vector<float>(motors_cfg_->motor_id_.size(), 0.0);
 
     motorpos_file_.open("motor_positions.csv");

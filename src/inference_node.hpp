@@ -27,6 +27,9 @@
 #include <std_srvs/srv/trigger.hpp>
 #include "robot_interface.hpp"
 #include <fstream>
+#include <cstdint>
+#include <ctime>
+
 
 enum class ObsStackOrder {
     FrameMajor,
@@ -309,6 +312,8 @@ class InferenceNode : public rclcpp::Node {
     void publish_joint_states();
     void publish_action();
     void publish_imu();
+
+    uint64_t monotonic_ns();
     
     template <typename T>
     void print_vector(const std::string& name, const std::vector<T>& vec) {
