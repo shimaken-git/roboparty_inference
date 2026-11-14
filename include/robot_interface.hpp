@@ -88,11 +88,19 @@ class RobotInterface {
         std::unique_lock<std::mutex> lock(joint_mutex_);
         return joint_tau_;
     }
+    std::vector<uint64_t> get_joint_time() {
+        if (!is_init_.load()) {
+            throw std::runtime_error("Motors not initialized");
+        }
+        std::unique_lock<std::mutex> lock(joint_mutex_);
+        return joint_time_;
+    }
     const std::vector<float>& get_quat() {
         if (!imu_) {
             throw std::runtime_error("IMU not initialized");
         }
         auto raw = imu_->get_quat();  // w, x, y, z
+        imu_timestamp_ = imu_->get_timestamp();
         q_body_ = Eigen::Quaternionf(raw[0], raw[1], raw[2], raw[3]) * extrinsic_q_inv_;
         q_body_.normalize();
         quat_buf_[0] = q_body_.w();
@@ -113,6 +121,7 @@ class RobotInterface {
 
     std::atomic<bool> is_init_{false};
     void load_joint_limits(std::vector<double> limits);
+    std::atomic<uint64_t> imu_timestamp_{0};
 
 
    private:
@@ -132,6 +141,7 @@ class RobotInterface {
 
     std::mutex motors_mutex_, joint_mutex_;
     std::vector<float> joint_q_, joint_vel_, joint_tau_, motor_target_;
+    std::vector<uint64_t> joint_time_;
     std::vector<int> close_chain_motor_idx_, close_chain_joint_idx_, motor2urdf_;
 
     std::vector<double> joint_limits_;

@@ -299,6 +299,11 @@ void InferenceNode::inference() {
             });
 
             if(obs_file.is_open()){
+                obs_file << robot_->imu_timestamp_.load() << ",";
+                auto joint_times_ = robot_->get_joint_time();
+                for(auto tm : joint_times_){
+                    obs_file << tm << ",";
+                }
                 for(int i = 0; i < policy.obs.size(); i++){
                     if(i < policy.obs.size() - 1){
                         obs_file << policy.obs[i] << ",";

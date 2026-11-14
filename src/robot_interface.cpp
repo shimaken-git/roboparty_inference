@@ -140,6 +140,7 @@ void RobotInterface::apply_action(std::vector<float> action) {
             joint_q_[motor2urdf_[idx]] = motor->get_motor_pos() * robot_cfg_->motor_sign_[idx];
             joint_vel_[motor2urdf_[idx]] = motor->get_motor_spd() * robot_cfg_->motor_sign_[idx];
             joint_tau_[motor2urdf_[idx]] = motor->get_motor_current() * robot_cfg_->motor_sign_[idx];
+            joint_time_[motor2urdf_[idx]] = motor->get_motor_timestamp();
             if (motor->get_response_count() > offline_threshold_) {
                 throw std::runtime_error("Motor id " + std::to_string(motors_cfg_->motor_id_[idx]) + " offline");
             }
