@@ -251,6 +251,7 @@ void InferenceNode::control() {
         return;
     }
     auto period = std::chrono::microseconds(static_cast<long long>(dt_ * 1000000));
+    auto next_deadline = std::chrono::steady_clock::now();
     while(rclcpp::ok()){
         auto loop_start = std::chrono::steady_clock::now();
         try {
@@ -260,11 +261,11 @@ void InferenceNode::control() {
             rclcpp::shutdown();
             return;
         }
+        next_deadline += period;
         auto loop_end = std::chrono::steady_clock::now();
         auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(loop_end - loop_start);
-        auto sleep_time = period - elapsed_time;
-        if (sleep_time > std::chrono::microseconds(0)) {
-            std::this_thread::sleep_for(sleep_time);
+        if (loop_end < next_deadline) {
+            std::this_thread::sleep_until(next_deadline);
         }
     }
 }
@@ -278,6 +279,7 @@ void InferenceNode::inference() {
         return;
     }
     auto period = std::chrono::microseconds(static_cast<long long>(dt_ * 1000 * 1000 * decimation_));
+    auto next_deadline = std::chrono::steady_clock::now();
 
     while(rclcpp::ok()){
         auto loop_start = std::chrono::steady_clock::now();
@@ -409,15 +411,14 @@ void InferenceNode::inference() {
             return;
         }
 
+        next_deadline += period;
         auto loop_end = std::chrono::steady_clock::now();
-        // 使用微秒进行计算  // 計算にはマイクロ秒を使用する
         auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(loop_end - loop_start);
         auto sleep_time = period - elapsed_time;
 
-        if (sleep_time > std::chrono::microseconds(0)) {
-            std::this_thread::sleep_for(sleep_time);
+        if (loop_end < next_deadline) {
+            std::this_thread::sleep_until(next_deadline);
         } else {
-            // 警告信息也使用更精确的单位  // 警告メッセージではより正確な単位も使用されます
             RCLCPP_WARN(this->get_logger(), "Inference loop overran! Took %lld us, but period is %lld us.", static_cast<long long>(elapsed_time.count()), static_cast<long long>(period.count()));
         }
     }
