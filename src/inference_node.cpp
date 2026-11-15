@@ -284,7 +284,8 @@ void InferenceNode::inference() {
     while(rclcpp::ok()){
         auto loop_start = std::chrono::steady_clock::now();
         if(!is_running_.load()){
-            std::this_thread::sleep_for(period);
+            next_deadline = loop_start + period;
+            std::this_thread::sleep_until(next_deadline);
             continue;
         }
 
@@ -334,8 +335,8 @@ void InferenceNode::inference() {
 
             auto end_time = monotonic_ns();
             if(obs_file.is_open()){
-            } 
                 obs_file << start_time << "," << end_time << std::endl;
+            } 
             {
                 std::unique_lock<std::mutex> lock(act_mutex_);
                 for (int i = 0; i < policy.ctx->output_buffer.size(); i++) {
