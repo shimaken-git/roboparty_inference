@@ -285,6 +285,7 @@ void InferenceNode::inference() {
     constexpr double kp = 0.1;
     constexpr double max_correction_ms = 0.2;
     double correction_ms = 0.0;
+    uint64_t previous_start_time = 0;
 
     while(rclcpp::ok()){
         auto loop_start = std::chrono::steady_clock::now();
@@ -340,12 +341,20 @@ void InferenceNode::inference() {
 
             auto end_time = monotonic_ns();
 
-            auto age = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::nanoseconds(start_time - joint_times_[0]));
-            double age_ms = static_cast<double>(age.count()) / 1000.0;
+            // auto age = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::nanoseconds(start_time - joint_times_[0]));
+            // double age_ms = static_cast<double>(age.count()) / 1000.0;
+            auto age_ns = static_cast<int64_t>(start_time) - static_cast<int64_t>(joint_times_[0]);
+            double age_ms = age_ns * 1e-6;
             double error_ms = age_ms - target_age_ms;
             correction_ms = std::clamp(kp * error_ms, -max_correction_ms, max_correction_ms);
+            uint64_t inference_interval_ns = 0;
+            if(previous_start_time != 0){
+                inference_interval_ns = start_time - previous_start_time;
+            }
+            previous_start_time = start_time;
 
             if(obs_file.is_open()){
+                obs_file << age_ms << "," << error_ms << "," << correction_ms << "," << inference_interval_ns << ",";
                 obs_file << start_time << "," << end_time << std::endl;
             } 
             {
