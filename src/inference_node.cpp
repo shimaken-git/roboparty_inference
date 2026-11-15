@@ -280,6 +280,11 @@ void InferenceNode::inference() {
     }
     auto period = std::chrono::microseconds(static_cast<long long>(dt_ * 1000 * 1000 * decimation_));
     auto next_deadline = std::chrono::steady_clock::now();
+    // PLL parameters
+    constexpr double target_age_ms = 2.0;
+    constexpr double kp = 0.1;
+    constexpr double max_correction_ms = 0.2;
+    double correction_ms = 0.0;
 
     while(rclcpp::ok()){
         auto loop_start = std::chrono::steady_clock::now();
@@ -301,9 +306,9 @@ void InferenceNode::inference() {
                 return std::clamp(val, -clip_observations_, clip_observations_);
             });
 
+            auto joint_times_ = robot_->get_joint_time();
             if(obs_file.is_open()){
                 obs_file << robot_->imu_timestamp_.load() << ",";
-                auto joint_times_ = robot_->get_joint_time();
                 for(auto tm : joint_times_){
                     obs_file << tm << ",";
                 }
@@ -334,6 +339,12 @@ void InferenceNode::inference() {
                 policy.ctx->output_names_raw.data(), policy.ctx->output_tensor.get(), policy.ctx->num_outputs);
 
             auto end_time = monotonic_ns();
+
+            auto age = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::nanoseconds(start_time - joint_times_[0]));
+            double age_ms = static_cast<double>(age.count()) / 1000.0;
+            double error_ms = age_ms - target_age_ms;
+            correction_ms = std::clamp(kp * error_ms, -max_correction_ms, max_correction_ms);
+
             if(obs_file.is_open()){
                 obs_file << start_time << "," << end_time << std::endl;
             } 
@@ -412,10 +423,10 @@ void InferenceNode::inference() {
             return;
         }
 
-        next_deadline += period;
+        next_deadline += period - std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double, std::milli>(correction_ms));
+
         auto loop_end = std::chrono::steady_clock::now();
         auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(loop_end - loop_start);
-        auto sleep_time = period - elapsed_time;
 
         if (loop_end < next_deadline) {
             std::this_thread::sleep_until(next_deadline);
