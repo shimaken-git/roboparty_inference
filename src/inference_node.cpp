@@ -299,6 +299,7 @@ void InferenceNode::inference() {
             std::unique_lock<std::mutex> mode_lock(mode_mutex_);
             auto& policy = active_policy();
             update_obs_segments(policy.obs_segments, policy.obs_layout);
+            auto joint_times_ = robot_->get_joint_time();
             publish_imu();
             publish_joint_states();
             flatten_obs_segments(policy.obs_segments, policy.obs.begin());
@@ -343,7 +344,7 @@ void InferenceNode::inference() {
 
             // auto age = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::nanoseconds(start_time - joint_times_[0]));
             // double age_ms = static_cast<double>(age.count()) / 1000.0;
-            auto age_ns = static_cast<int64_t>(start_time) - static_cast<int64_t>(joint_times_[0]);
+            auto age_ns = static_cast<int64_t>(start_time) - static_cast<int64_t>(joint_times_[5]);
             double age_ms = age_ns * 1e-6;
             double error_ms = age_ms - target_age_ms;
             correction_ms = std::clamp(kp * error_ms, -max_correction_ms, max_correction_ms);
