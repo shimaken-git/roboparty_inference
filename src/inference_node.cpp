@@ -308,7 +308,6 @@ void InferenceNode::inference() {
                 return std::clamp(val, -clip_observations_, clip_observations_);
             });
 
-            auto joint_times_ = robot_->get_joint_time();
             if(obs_file.is_open()){
                 obs_file << robot_->imu_timestamp_.load() << ",";
                 for(auto tm : joint_times_){
