@@ -95,30 +95,35 @@ class RobotInterface {
         std::unique_lock<std::mutex> lock(joint_mutex_);
         return joint_time_;
     }
+    // BEGIN ankle frequency response test
     const std::vector<float>& get_quat() {
-        if (!imu_) {
-            throw std::runtime_error("IMU not initialized");
-        }
-        auto raw = imu_->get_quat();  // w, x, y, z
+        const auto q_body = read_body_quat();
         imu_timestamp_ = imu_->get_timestamp();
-        q_body_ = Eigen::Quaternionf(raw[0], raw[1], raw[2], raw[3]) * extrinsic_q_inv_;
-        q_body_.normalize();
-        quat_buf_[0] = q_body_.w();
-        quat_buf_[1] = q_body_.x();
-        quat_buf_[2] = q_body_.y(); 
-        quat_buf_[3] = q_body_.z();
+        quat_buf_[0] = q_body.w();
+        quat_buf_[1] = q_body.x();
+        quat_buf_[2] = q_body.y();
+        quat_buf_[3] = q_body.z();
         return quat_buf_;
     }
     const std::vector<float>& get_ang_vel() {
-        if (!imu_) {
-            throw std::runtime_error("IMU not initialized");
-        }
-        auto raw = imu_->get_ang_vel();  // in IMU frame
-        Eigen::Map<const Eigen::Vector3f> omega_imu(raw.data());
-        Eigen::Map<Eigen::Vector3f>(ang_vel_buf_.data()) = extrinsic_R_mat_ * omega_imu;
+        Eigen::Map<Eigen::Vector3f>(ang_vel_buf_.data()) = read_body_ang_vel();
         return ang_vel_buf_;
     }
 
+    struct ImuSample {
+        Eigen::Quaternionf orientation;
+        Eigen::Vector3f angular_velocity;
+        uint64_t timestamp_ns;
+    };
+
+    // The control thread reads into local storage while policy inference uses its own buffers.
+    ImuSample read_imu_sample() const {
+        const auto orientation = read_body_quat();
+        const auto timestamp = imu_->get_timestamp();
+        return {orientation, read_body_ang_vel(), timestamp};
+    }
+
+    // END ankle frequency response test
     std::atomic<bool> is_init_{false};
     void load_joint_limits(std::vector<double> limits);
     std::atomic<uint64_t> imu_timestamp_{0};
@@ -133,7 +138,6 @@ class RobotInterface {
     std::shared_ptr<Decouple> ankle_decouple_;
     Eigen::Matrix3f extrinsic_R_mat_ = Eigen::Matrix3f::Identity();
     Eigen::Quaternionf extrinsic_q_inv_ = Eigen::Quaternionf::Identity();
-    Eigen::Quaternionf q_body_;
     std::vector<float> quat_buf_{0.f, 0.f, 0.f, 0.f};
     std::vector<float> ang_vel_buf_{0.f, 0.f, 0.f};
     std::vector<std::shared_ptr<MotorDriver>> motors_;
@@ -149,6 +153,24 @@ class RobotInterface {
     std::ofstream motorpos_file_;
     std::ofstream motorcur_file_;
 
+    // BEGIN ankle frequency response test
+    Eigen::Quaternionf read_body_quat() const {
+        if (!imu_) {
+            throw std::runtime_error("IMU not initialized");
+        }
+        const auto raw = imu_->get_quat();
+        return (Eigen::Quaternionf(raw[0], raw[1], raw[2], raw[3]) * extrinsic_q_inv_).normalized();
+    }
+
+    Eigen::Vector3f read_body_ang_vel() const {
+        if (!imu_) {
+            throw std::runtime_error("IMU not initialized");
+        }
+        const auto raw = imu_->get_ang_vel();
+        return extrinsic_R_mat_ * Eigen::Map<const Eigen::Vector3f>(raw.data());
+    }
+
+    // END ankle frequency response test
     void setup_motors();
     void setup_imu();
     void check_motors_angle();

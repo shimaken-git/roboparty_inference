@@ -227,6 +227,12 @@ void InferenceNode::get_cmd_vel_obs(std::vector<float>& segment) {
     //     cmd_vel_[i] = filter_cmd_vel(cmd_vel_[i], last_cmd_vel_[i], 0.05f, 0.01f, 0.5f);
     //     last_cmd_vel_[i] = cmd_vel_[i];
     // }
+    // BEGIN ankle frequency response test
+    if (ankle_test_active_.load()) {
+        std::fill(segment.begin(), segment.end(), 0.0f);
+        return;
+    }
+    // END ankle frequency response test
     segment[0] = cmd_vel_[0] * obs_scales_lin_vel_;
     segment[1] = cmd_vel_[1] * obs_scales_lin_vel_;
     segment[2] = cmd_vel_[2] * obs_scales_ang_vel_;

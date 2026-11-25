@@ -6,6 +6,9 @@
 #include <vector>
 #include <mutex>
 #include <atomic>
+// BEGIN ankle frequency response test
+#include <array>
+// END ankle frequency response test
 #include <condition_variable>
 #include <algorithm>
 #include <memory>
@@ -95,6 +98,10 @@ class InferenceNode : public rclcpp::Node {
         robot_->load_joint_limits(joint_limits_);
         act_file.open("actions.csv");
         obs_file.open("observations.csv");
+        // BEGIN ankle frequency response test
+        ankle_samples_.reserve(2048);
+        ankle_samples_to_write_.reserve(2048);
+        // END ankle frequency response test
 
         Ort::ThreadingOptions thread_opts;
         if (intra_threads_ > 0) {
@@ -132,6 +139,10 @@ class InferenceNode : public rclcpp::Node {
         reset_runtime_state();
 
         auto data_qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort().durability_volatile();
+        // BEGIN ankle frequency response test
+        ankle_log_timer_ = this->create_wall_timer(
+            std::chrono::seconds(1), [this]() { write_ankle_samples(); });
+        // END ankle frequency response test
         joy_subscription_ = this->create_subscription<sensor_msgs::msg::Joy>(
             "/joy", data_qos, std::bind(&InferenceNode::subs_joy_callback, this, std::placeholders::_1));
         cmd_subscription_ = this->create_subscription<geometry_msgs::msg::Twist>(
@@ -190,6 +201,9 @@ class InferenceNode : public rclcpp::Node {
         if(obs_file.is_open()){
             obs_file.close();
         }
+        // BEGIN ankle frequency response test
+        write_ankle_samples();
+        // END ankle frequency response test
     }
     bool supports_interrupt() const;
     bool has_motion_policy() const;
@@ -237,6 +251,34 @@ class InferenceNode : public rclcpp::Node {
     std::ofstream act_file;
     std::ofstream obs_file;
 
+    // BEGIN ankle frequency response test
+    // ROBROBO_FULL URDF indices: both ankle pitch axes point in the same direction.
+    static constexpr std::array<size_t, 4> ankle_motors_{4, 5, 10, 11};
+    static constexpr std::array<size_t, 6> ankle_test_joints_{4, 10, 0, 6, 3, 9};
+    struct AnkleSample {
+        uint64_t stamp, imu_stamp, run, phase_start;
+        std::array<uint64_t, 4> motor_stamps;
+        double frequency, input, gyro_y, pitch;
+        std::array<float, 6> policy, command, position;
+        std::array<float, 4> motor_position, motor_velocity, motor_torque;
+    };
+    double ankle_test_amplitude_, ankle_test_duration_s_;
+    std::vector<double> ankle_frequencies_;
+    bool ankle_chord_down_ = false; // Joy callback only
+    std::atomic<bool> ankle_toggle_{false}, ankle_test_active_{false}, ankle_log_failed_{false};
+    uint64_t ankle_run_ = 0, ankle_phase_start_ = 0, ankle_policy_stamp_ = 0;
+    size_t ankle_frequency_index_ = 0;
+    bool ankle_measurement_started_ = false; // Protected by act_mutex_.
+    std::vector<AnkleSample> ankle_samples_, ankle_samples_to_write_; // producer protected by act_mutex_
+    std::ofstream ankle_file_;
+    rclcpp::TimerBase::SharedPtr ankle_log_timer_;
+
+    void finish_ankle_frequency_locked(const char* status);
+    void stop_ankle_test_locked(const char* reason);
+    void stop_ankle_test(const char* reason);
+    void write_ankle_samples();
+
+    // END ankle frequency response test
     float mixing_ratio;
     float mixing_switch_period;
 

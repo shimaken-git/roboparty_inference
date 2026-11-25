@@ -14,6 +14,12 @@ void InferenceNode::load_config() {
     this->declare_parameter<int>("joint_num", 23);
     this->declare_parameter<int>("decimation", 10);
     this->declare_parameter<float>("dt", 0.001);
+    // BEGIN ankle frequency response test
+    ankle_test_amplitude_ = this->declare_parameter<double>("ankle_test_amplitude_rad", 0.005);
+    ankle_test_duration_s_ = this->declare_parameter<double>("ankle_test_duration_s", 20.0);
+    ankle_frequencies_ = this->declare_parameter<std::vector<double>>(
+        "ankle_test_frequencies_hz", {0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0});
+    // END ankle frequency response test
     this->declare_parameter<float>("obs_scales_lin_vel", 1.0);
     this->declare_parameter<float>("obs_scales_ang_vel", 1.0);
     this->declare_parameter<float>("obs_scales_dof_pos", 1.0);
@@ -48,6 +54,18 @@ void InferenceNode::load_config() {
     this->get_parameter("joint_num", joint_num_);
     this->get_parameter("decimation", decimation_);
     this->get_parameter("dt", dt_);
+    // BEGIN ankle frequency response test
+    if (!(ankle_test_amplitude_ > 0.0 && ankle_test_amplitude_ <= 0.02)) {
+        throw std::invalid_argument("ankle_test_amplitude_rad must be in (0, 0.02]");
+    }
+    if (!std::isfinite(ankle_test_duration_s_) || ankle_test_duration_s_ <= 0.0) {
+        throw std::invalid_argument("ankle_test_duration_s must be finite and positive");
+    }
+    if (ankle_frequencies_.empty() || !std::all_of(ankle_frequencies_.begin(), ankle_frequencies_.end(),
+        [this](double hz) { return hz > 0.0 && hz * dt_ < 0.5; })) {
+        throw std::invalid_argument("ankle_test_frequencies_hz must contain positive frequencies below Nyquist");
+    }
+    // END ankle frequency response test
     this->get_parameter("obs_scales_lin_vel", obs_scales_lin_vel_);
     this->get_parameter("obs_scales_ang_vel", obs_scales_ang_vel_);
     this->get_parameter("obs_scales_dof_pos", obs_scales_dof_pos_);
@@ -166,6 +184,11 @@ void InferenceNode::load_config() {
 }
 
 void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Joy> msg) {
+    // BEGIN ankle frequency response test
+    if (msg->buttons.size() <= 10 || msg->axes.size() <= 7) {
+        return;
+    }
+    // END ankle frequency response test
     if (is_joy_control_){
         std::unique_lock<std::mutex> lock(cmd_mutex_);
         cmd_vel_[0] = std::clamp(msg->axes[1] * clip_cmd_[1], clip_cmd_[0], clip_cmd_[1]);  //X方向   Xbox:axes[4] PS4:axes[1] left stick stride
@@ -198,6 +221,10 @@ void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Jo
         }
     }
     if (msg->buttons[1] == 1 && msg->buttons[1] != last_button2_) {  //Xbox:B PS4:○　start/pause inference
+        // BEGIN ankle frequency response test
+        stop_ankle_test("inference paused by controller");
+        ankle_toggle_.store(false);
+        // END ankle frequency response test
         is_running_.store(!is_running_.load());
         RCLCPP_INFO(this->get_logger(), "Inference %s", is_running_.load() ? "started" : "paused");
     }
@@ -215,6 +242,10 @@ void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Jo
         if (msg->buttons[3] == 1 && msg->buttons[3] != last_button4_) {     // Xbox:LB PS4:□　switch policy mode
             const auto switch_while_paused = [this](auto&& switch_mode) {
                 std::unique_lock<std::mutex> switch_lock(lb_switch_mutex_);
+                // BEGIN ankle frequency response test
+                stop_ankle_test("policy mode switched");
+                ankle_toggle_.store(false);
+                // END ankle frequency response test
                 const bool restore_running = is_running_.exchange(false);
                 if (restore_running) {
                     RCLCPP_INFO(this->get_logger(), "Inference paused");
@@ -283,6 +314,15 @@ void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Jo
             RCLCPP_FATAL(this->get_logger(), "Exception in refresh_joints: %s", e.what());
         }
     }
+    // BEGIN ankle frequency response test
+    // PS4 R1 + D-pad left: trigger once when either button completes the chord.
+    const bool ankle_chord = msg->buttons[5] == 1 && msg->axes[6] > 0.5f;
+    if (ankle_chord && !ankle_chord_down_ && is_running_.load()) {
+        ankle_toggle_.store(true);
+    }
+    ankle_chord_down_ = ankle_chord;
+
+    // END ankle frequency response test
     last_button0_ = msg->buttons[9];
     last_button1_ = msg->buttons[10];
     last_button2_ = msg->buttons[1];
@@ -494,6 +534,10 @@ void InferenceNode::stop_inference_srv(const std::shared_ptr<std_srvs::srv::Trig
     }
     is_running_.store(false);
     response->success = true;
+    // BEGIN ankle frequency response test
+    stop_ankle_test("inference stopped by service");
+    ankle_toggle_.store(false);
+    // END ankle frequency response test
     response->message = "Inference stopped";
 }
 

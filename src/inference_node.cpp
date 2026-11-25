@@ -1,4 +1,18 @@
 #include "inference_node.hpp"
+// BEGIN ankle frequency response test
+#include "utils/close_chain_mapping.hpp"
+#include <iomanip>
+#include <limits>
+
+namespace {
+constexpr uint64_t ankle_settle_ns = 3'000'000'000ULL;
+constexpr uint64_t ankle_freshness_ns = 50'000'000ULL;
+
+bool fresh_ankle_sample(uint64_t now, uint64_t stamp) {
+    return stamp != 0 && now >= stamp && now - stamp <= ankle_freshness_ns;
+}
+}
+// END ankle frequency response test
 
 ObsStackOrder InferenceNode::parse_obs_stack_order(const std::string& stack_order_name) {
     if (stack_order_name == "frame_major") {
@@ -117,6 +131,10 @@ void InferenceNode::setup_model(std::unique_ptr<ModelContext>& ctx, std::string 
 
 void InferenceNode::reset_runtime_state() {
     is_running_.store(false);
+    // BEGIN ankle frequency response test
+    stop_ankle_test("runtime reset");
+    ankle_toggle_.store(false);
+    // END ankle frequency response test
     is_interrupt_.store(false);
     is_motion_policy_.store(false);
     is_test_.store(false);
@@ -233,6 +251,73 @@ void InferenceNode::apply_action() {
             for (size_t i = 0; i < act_.size(); i++) {
                 last_act_[i] = act_alpha_ * act_[i] + (1 - act_alpha_) * last_act_[i];
             }
+            // BEGIN ankle frequency response test
+            if (ankle_test_active_.load()) {
+                const auto imu = robot_->read_imu_sample();
+                const auto now = monotonic_ns();
+                const auto begin = ankle_phase_start_ + ankle_settle_ns;
+                const Eigen::Quaternionf q = imu_correct_quat_ * imu.orientation;
+                const auto up = q * Eigen::Vector3f::UnitZ();
+                const double gyro_y = imu.angular_velocity.y();
+                if (!fresh_ankle_sample(now, ankle_policy_stamp_) ||
+                    !fresh_ankle_sample(now, imu.timestamp_ns) || !(up.z() > std::cos(0.30)) ||
+                    !(std::abs(gyro_y) < 1.5) || is_test_.load() ||
+                    is_motion_policy_.load() || is_interrupt_.load() || is_teleop_.load()) {
+                    stop_ankle_test_locked("posture, gyro, stale data, or mode changed");
+                } else if (now >= begin && (now - begin) * 1e-9 < ankle_test_duration_s_) {
+                    auto command = last_act_;
+                    AnkleSample sample{};
+                    sample.stamp = now;
+                    sample.imu_stamp = imu.timestamp_ns;
+                    sample.run = ankle_run_;
+                    sample.phase_start = begin;
+                    sample.frequency = ankle_frequencies_[ankle_frequency_index_];
+                    sample.input = ankle_test_amplitude_ * std::sin(
+                        6.283185307179586 * sample.frequency * ((now - begin) * 1e-9));
+                    const auto forward = q * Eigen::Vector3f::UnitX();
+                    sample.pitch = std::atan2(-forward.z(), std::hypot(forward.x(), forward.y()));
+                    sample.gyro_y = gyro_y;
+                    const auto positions = robot_->get_joint_q();
+                    const auto velocities = robot_->get_joint_vel();
+                    const auto torques = robot_->get_joint_tau();
+                    const auto timestamps = robot_->get_joint_time();
+                    bool feedback_ok = true;
+                    for (size_t i = 0; i < ankle_motors_.size(); ++i) {
+                        const size_t motor = ankle_motors_[i];
+                        sample.motor_position[i] = positions[motor];
+                        sample.motor_velocity[i] = velocities[motor];
+                        sample.motor_torque[i] = torques[motor];
+                        sample.motor_stamps[i] = timestamps[motor];
+                        feedback_ok = feedback_ok && fresh_ankle_sample(now, timestamps[motor]) &&
+                            std::isfinite(positions[motor]) && std::abs(velocities[motor]) < 3.0f &&
+                            std::isfinite(torques[motor]);
+                    }
+                    command[ankle_test_joints_[0]] += sample.input;
+                    command[ankle_test_joints_[1]] += sample.input;
+                    for (size_t i = 0; i < ankle_test_joints_.size(); ++i) {
+                        const size_t joint = ankle_test_joints_[i];
+                        sample.policy[i] = act_[joint];
+                        sample.command[i] = command[joint];
+                        sample.position[i] = positions[joint];
+                        feedback_ok = feedback_ok && std::isfinite(command[joint]);
+                    }
+                    if (feedback_ok && ankle_samples_.size() < ankle_samples_.capacity() &&
+                        ankle_test_active_.load() && is_running_.load()) {
+                        if (!ankle_measurement_started_) {
+                            ankle_measurement_started_ = true;
+                            RCLCPP_INFO(get_logger(), "Ankle sweep [%zu/%zu] %.3g Hz started (%.3g s)",
+                                ankle_frequency_index_ + 1, ankle_frequencies_.size(),
+                                sample.frequency, ankle_test_duration_s_);
+                        }
+                        ankle_samples_.push_back(sample);
+                        lock.unlock();
+                        robot_->apply_action(std::move(command));
+                        return;
+                    }
+                    stop_ankle_test_locked("feedback invalid, motor speed limit, or log buffer full");
+                }
+            }
+            // END ankle frequency response test
         }
         robot_->apply_action(last_act_);
     } else if(is_test_.load()){
@@ -289,15 +374,60 @@ void InferenceNode::inference() {
 
     while(rclcpp::ok()){
         auto loop_start = std::chrono::steady_clock::now();
-        if(!is_running_.load()){
+        // BEGIN ankle frequency response test
+        if(!is_running_.load() || !robot_->is_init_.load()){
+            stop_ankle_test("inference paused or motors deinitialized");
+            ankle_toggle_.store(false);
             next_deadline = loop_start + period;
             std::this_thread::sleep_until(next_deadline);
             continue;
         }
+        // END ankle frequency response test
 
         try {
             std::unique_lock<std::mutex> mode_lock(mode_mutex_);
             auto& policy = active_policy();
+            // BEGIN ankle frequency response test
+            const bool toggle_ankles = ankle_toggle_.exchange(false);
+            bool starting_ankle_test = false;
+            if (toggle_ankles || ankle_test_active_.load()) {
+                bool neutral;
+                {
+                    std::scoped_lock lock(cmd_mutex_);
+                    neutral = std::all_of(cmd_vel_.begin(), cmd_vel_.end(),
+                        [](float v) { return std::abs(v) <= 0.03f; });
+                }
+                const bool ready = neutral && is_running_.load() && !is_test_.load() &&
+                    !is_teleop_.load() && !is_motion_policy_.load() && !is_interrupt_.load() &&
+                    mixing_ratio == 0.0f && joint_num_ == 23 && decimation_ == 5 &&
+                    std::abs(dt_ - 0.003f) < 1e-6f && !ankle_log_failed_.load();
+                std::scoped_lock lock(act_mutex_);
+                const auto now = monotonic_ns();
+                if (ankle_test_active_.load()) {
+                    if (toggle_ankles || !ready) {
+                        stop_ankle_test_locked(toggle_ankles ? "R1 + D-pad left" : "standing conditions changed");
+                    } else if (now - ankle_phase_start_ >= ankle_settle_ns &&
+                        (now - ankle_phase_start_ - ankle_settle_ns) * 1e-9 >= ankle_test_duration_s_) {
+                        finish_ankle_frequency_locked("completed");
+                        if (++ankle_frequency_index_ == ankle_frequencies_.size()) {
+                            stop_ankle_test_locked(nullptr);
+                        } else {
+                            ankle_phase_start_ = now;
+                            RCLCPP_INFO(get_logger(), "Ankle sweep: settling before %.3g Hz",
+                                ankle_frequencies_[ankle_frequency_index_]);
+                        }
+                    }
+                } else if (toggle_ankles && ready) {
+                    ankle_frequency_index_ = 0;
+                    ankle_phase_start_ = now;
+                    ankle_run_ = now;
+                    starting_ankle_test = true;
+                    // Activate after this tick has captured fresh posture and policy output.
+                } else if (toggle_ankles) {
+                    RCLCPP_WARN(get_logger(), "Ankle sweep start rejected: check standing mode, neutral stick, timing, and log");
+                }
+            }
+            // END ankle frequency response test
             update_obs_segments(policy.obs_segments, policy.obs_layout);
             auto joint_times_ = robot_->get_joint_time();
             publish_imu();
@@ -424,6 +554,29 @@ void InferenceNode::inference() {
                 //         act_[act_.size() - teleop_action_.size() + i] = act_[act_.size() - teleop_action_.size() + i] * (1.0 - mixing_ratio) + teleop_action_[i] * mixing_ratio;
                 //     }
                 // }
+                // BEGIN ankle frequency response test
+                if (ankle_test_active_.load() || starting_ankle_test) {
+                    const Eigen::Quaternionf q = imu_correct_quat_ *
+                        Eigen::Quaternionf(quat_buffer_[0], quat_buffer_[1], quat_buffer_[2], quat_buffer_[3]);
+                    const auto up = q * Eigen::Vector3f::UnitZ();
+                    ankle_policy_stamp_ = monotonic_ns();
+                    const bool standing = up.z() > std::cos(0.30) && std::abs(ang_vel_buffer_[1]) < 1.5 &&
+                        fresh_ankle_sample(ankle_policy_stamp_, robot_->imu_timestamp_.load()) &&
+                        std::all_of(act_.begin(), act_.end(), [](float v) { return std::isfinite(v); });
+                    if (!standing) {
+                        if (starting_ankle_test) {
+                            RCLCPP_WARN(get_logger(), "Ankle sweep start rejected: posture, gyro, IMU age, or policy output");
+                        } else {
+                            stop_ankle_test_locked("posture, gyro, IMU age, or policy output");
+                        }
+                    } else if (starting_ankle_test && is_running_.load()) {
+                        ankle_test_active_.store(true);
+                        RCLCPP_INFO(get_logger(), "Ankle sweep started: %zu frequencies, %.3g rad, %.3g s per frequency",
+                            ankle_frequencies_.size(), ankle_test_amplitude_, ankle_test_duration_s_);
+                        RCLCPP_INFO(get_logger(), "Ankle sweep: settling before %.3g Hz", ankle_frequencies_.front());
+                    }
+                }
+                // END ankle frequency response test
                 publish_action();
             }
         } catch (const std::exception& e) {
@@ -445,6 +598,97 @@ void InferenceNode::inference() {
     }
 }
 
+// BEGIN ankle frequency response test
+void InferenceNode::finish_ankle_frequency_locked(const char* status) {
+    if (ankle_measurement_started_) {
+        RCLCPP_INFO(get_logger(), "Ankle sweep [%zu/%zu] %.3g Hz ended (%s)",
+            ankle_frequency_index_ + 1, ankle_frequencies_.size(),
+            ankle_frequencies_[ankle_frequency_index_], status);
+        ankle_measurement_started_ = false;
+    }
+}
+
+void InferenceNode::stop_ankle_test_locked(const char* reason) {
+    if (!ankle_test_active_.exchange(false)) {
+        return;
+    }
+    if (reason) {
+        finish_ankle_frequency_locked("interrupted");
+        RCLCPP_WARN(get_logger(), "Ankle sweep ended (interrupted): %s", reason);
+    } else {
+        RCLCPP_INFO(get_logger(), "Ankle sweep ended (completed)");
+    }
+}
+
+void InferenceNode::stop_ankle_test(const char* reason) {
+    std::scoped_lock lock(act_mutex_);
+    stop_ankle_test_locked(reason);
+}
+
+void InferenceNode::write_ankle_samples() {
+    {
+        std::scoped_lock lock(act_mutex_);
+        ankle_samples_.swap(ankle_samples_to_write_);
+    }
+    if (ankle_samples_to_write_.empty() || ankle_log_failed_.load()) {
+        ankle_samples_to_write_.clear();
+        return;
+    }
+    if (!ankle_file_.is_open()) {
+        const std::string path = "ankle_frequency_response_" +
+            std::to_string(ankle_samples_to_write_.front().run) + ".csv";
+        ankle_file_.open(path);
+        ankle_file_ << std::setprecision(12)
+            << "run,command_time_ns,time_s,frequency_hz,test_rad,imu_time_ns,imu_gyro_y_rad_s,body_pitch_rad";
+        constexpr std::array<const char*, 6> joints{
+            "left_ankle_pitch", "right_ankle_pitch", "left_thigh_pitch", "right_thigh_pitch", "left_knee", "right_knee"
+        };
+        for (const auto* joint : joints) {
+            ankle_file_ << ',' << joint << "_policy_target_rad," << joint << "_command_rad," << joint << "_angle_rad";
+        }
+        ankle_file_ << ",left_ankle_pitch_velocity_rad_s,right_ankle_pitch_velocity_rad_s"
+            ",left_ankle_pitch_estimated_torque_nm,right_ankle_pitch_estimated_torque_nm"
+            ",left_motor_a_time_ns,left_motor_b_time_ns,right_motor_a_time_ns,right_motor_b_time_ns\n";
+        RCLCPP_INFO(get_logger(), "Ankle sweep CSV: %s", path.c_str());
+    }
+    Decouple mapping;
+    for (const auto& s : ankle_samples_to_write_) {
+        ankle_file_ << s.run << ',' << s.stamp << ',' << (s.stamp - s.phase_start) * 1e-9 << ','
+            << s.frequency << ',' << s.input << ',' << s.imu_stamp << ',' << s.gyro_y << ',' << s.pitch;
+        auto position = s.position;
+        std::array<double, 2> velocity{}, torque{};
+        for (size_t side = 0; side < 2; ++side) {
+            const size_t a = 2 * side, b = a + 1;
+            const Eigen::Vector2d motor(s.motor_position[a], s.motor_position[b]);
+            const auto result = mapping.forward_kinematics(motor, side == 0);
+            if (result.count < 0 || result.Jac.size() < 2 || !result.ankle_joint_ori.allFinite() ||
+                !result.Jac[0].allFinite() || !result.Jac[1].allFinite()) {
+                position[side] = velocity[side] = torque[side] = std::numeric_limits<float>::quiet_NaN();
+                continue;
+            }
+            position[side] = result.ankle_joint_ori[0];
+            velocity[side] = (result.Jac[0] * Eigen::Vector2d(s.motor_velocity[a], s.motor_velocity[b]))[0];
+            torque[side] = (result.Jac[1].transpose() * Eigen::Vector2d(s.motor_torque[a], s.motor_torque[b]))[0];
+        }
+        for (size_t i = 0; i < ankle_test_joints_.size(); ++i) {
+            ankle_file_ << ',' << s.policy[i] << ',' << s.command[i] << ',' << position[i];
+        }
+        ankle_file_ << ',' << velocity[0] << ',' << velocity[1] << ',' << torque[0] << ',' << torque[1];
+        for (auto t : s.motor_stamps) {
+            ankle_file_ << ',' << t;
+        }
+        ankle_file_ << '\n';
+    }
+    ankle_file_.flush();
+    if (!ankle_file_) {
+        ankle_log_failed_.store(true);
+        stop_ankle_test("CSV write failed");
+        RCLCPP_ERROR(get_logger(), "Ankle sweep CSV write failed");
+    }
+    ankle_samples_to_write_.clear();
+}
+
+// END ankle frequency response test
 void InferenceNode::imu_correction_initialize() {
     imu_correct_quat_ = Eigen::Quaternionf::Identity();
     Eigen::AngleAxisf roll_correction(imu_correction_[0], Eigen::Vector3f::UnitX());

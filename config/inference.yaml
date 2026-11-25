@@ -31,6 +31,11 @@ inference_node:
         decimation: 5
         intra_threads: 1
         dt: 0.003
+        # BEGIN ankle frequency response test
+        ankle_test_amplitude_rad: 0.005
+        ankle_test_frequencies_hz: [0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0]
+        ankle_test_duration_s: 20.0  # Measurement duration per frequency, excluding settling.
+        # END ankle frequency response test
         obs_scales_lin_vel: 1.0
         obs_scales_ang_vel: 1.0
         obs_scales_dof_pos: 1.0
