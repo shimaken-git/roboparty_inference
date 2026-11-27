@@ -254,12 +254,12 @@ class InferenceNode : public rclcpp::Node {
     // BEGIN ankle frequency response test
     // ROBROBO_FULL URDF indices: both ankle pitch axes point in the same direction.
     static constexpr std::array<size_t, 4> ankle_motors_{4, 5, 10, 11};
-    static constexpr std::array<size_t, 6> ankle_test_joints_{4, 10, 0, 6, 3, 9};
+    static constexpr std::array<size_t, 8> ankle_test_joints_{4, 10, 5, 11, 0, 6, 3, 9};
     struct AnkleSample {
         uint64_t stamp, imu_stamp, run, phase_start;
         std::array<uint64_t, 4> motor_stamps;
         double frequency, input, gyro_y, pitch;
-        std::array<float, 6> policy, command, position;
+        std::array<float, ankle_test_joints_.size()> policy, command, position;
         std::array<float, 4> motor_position, motor_velocity, motor_torque;
     };
     double ankle_test_amplitude_, ankle_test_duration_s_;

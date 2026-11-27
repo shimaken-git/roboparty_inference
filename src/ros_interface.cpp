@@ -55,8 +55,8 @@ void InferenceNode::load_config() {
     this->get_parameter("decimation", decimation_);
     this->get_parameter("dt", dt_);
     // BEGIN ankle frequency response test
-    if (!(ankle_test_amplitude_ > 0.0 && ankle_test_amplitude_ <= 0.02)) {
-        throw std::invalid_argument("ankle_test_amplitude_rad must be in (0, 0.02]");
+    if (!(ankle_test_amplitude_ >= 0.0 && ankle_test_amplitude_ <= 0.02)) {
+        throw std::invalid_argument("ankle_test_amplitude_rad must be in [0, 0.02]");
     }
     if (!std::isfinite(ankle_test_duration_s_) || ankle_test_duration_s_ <= 0.0) {
         throw std::invalid_argument("ankle_test_duration_s must be finite and positive");

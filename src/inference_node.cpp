@@ -640,14 +640,17 @@ void InferenceNode::write_ankle_samples() {
         ankle_file_.open(path);
         ankle_file_ << std::setprecision(12)
             << "run,command_time_ns,time_s,frequency_hz,test_rad,imu_time_ns,imu_gyro_y_rad_s,body_pitch_rad";
-        constexpr std::array<const char*, 6> joints{
-            "left_ankle_pitch", "right_ankle_pitch", "left_thigh_pitch", "right_thigh_pitch", "left_knee", "right_knee"
+        constexpr std::array<const char*, ankle_test_joints_.size()> joints{
+            "left_ankle_pitch", "right_ankle_pitch", "left_ankle_roll", "right_ankle_roll",
+            "left_thigh_pitch", "right_thigh_pitch", "left_knee", "right_knee"
         };
         for (const auto* joint : joints) {
             ankle_file_ << ',' << joint << "_policy_target_rad," << joint << "_command_rad," << joint << "_angle_rad";
         }
         ankle_file_ << ",left_ankle_pitch_velocity_rad_s,right_ankle_pitch_velocity_rad_s"
+            ",left_ankle_roll_velocity_rad_s,right_ankle_roll_velocity_rad_s"
             ",left_ankle_pitch_estimated_torque_nm,right_ankle_pitch_estimated_torque_nm"
+            ",left_ankle_roll_estimated_torque_nm,right_ankle_roll_estimated_torque_nm"
             ",left_motor_a_time_ns,left_motor_b_time_ns,right_motor_a_time_ns,right_motor_b_time_ns\n";
         RCLCPP_INFO(get_logger(), "Ankle sweep CSV: %s", path.c_str());
     }
@@ -656,24 +659,37 @@ void InferenceNode::write_ankle_samples() {
         ankle_file_ << s.run << ',' << s.stamp << ',' << (s.stamp - s.phase_start) * 1e-9 << ','
             << s.frequency << ',' << s.input << ',' << s.imu_stamp << ',' << s.gyro_y << ',' << s.pitch;
         auto position = s.position;
-        std::array<double, 2> velocity{}, torque{};
+        std::array<double, 4> velocity{}, torque{};
         for (size_t side = 0; side < 2; ++side) {
             const size_t a = 2 * side, b = a + 1;
             const Eigen::Vector2d motor(s.motor_position[a], s.motor_position[b]);
             const auto result = mapping.forward_kinematics(motor, side == 0);
+            Eigen::Vector2d angle, speed, effort;
             if (result.count < 0 || result.Jac.size() < 2 || !result.ankle_joint_ori.allFinite() ||
                 !result.Jac[0].allFinite() || !result.Jac[1].allFinite()) {
-                position[side] = velocity[side] = torque[side] = std::numeric_limits<float>::quiet_NaN();
-                continue;
+                angle.setConstant(std::numeric_limits<double>::quiet_NaN());
+                speed = effort = angle;
+            } else {
+                angle = result.ankle_joint_ori;
+                speed = result.Jac[0] * Eigen::Vector2d(s.motor_velocity[a], s.motor_velocity[b]);
+                effort = result.Jac[1].transpose() * Eigen::Vector2d(s.motor_torque[a], s.motor_torque[b]);
             }
-            position[side] = result.ankle_joint_ori[0];
-            velocity[side] = (result.Jac[0] * Eigen::Vector2d(s.motor_velocity[a], s.motor_velocity[b]))[0];
-            torque[side] = (result.Jac[1].transpose() * Eigen::Vector2d(s.motor_torque[a], s.motor_torque[b]))[0];
+            for (size_t axis = 0; axis < 2; ++axis) {
+                const size_t joint = axis * 2 + side; // Pitch L/R, then roll L/R.
+                position[joint] = angle[axis];
+                velocity[joint] = speed[axis];
+                torque[joint] = effort[axis];
+            }
         }
         for (size_t i = 0; i < ankle_test_joints_.size(); ++i) {
             ankle_file_ << ',' << s.policy[i] << ',' << s.command[i] << ',' << position[i];
         }
-        ankle_file_ << ',' << velocity[0] << ',' << velocity[1] << ',' << torque[0] << ',' << torque[1];
+        for (double value : velocity) {
+            ankle_file_ << ',' << value;
+        }
+        for (double value : torque) {
+            ankle_file_ << ',' << value;
+        }
         for (auto t : s.motor_stamps) {
             ankle_file_ << ',' << t;
         }
