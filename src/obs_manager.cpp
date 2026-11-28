@@ -251,13 +251,7 @@ void InferenceNode::get_dof_pos_obs(std::vector<float>& segment) {
     // }
     for (int i = 0; i < joint_num_; ++i) {
         const auto joint = usd2urdf_[i];
-        double position = joint_pos_buffer_[joint] - joint_default_angle_[joint];
-        if (joint == left_ankle_roll_joint_) {
-            position -= left_ankle_roll_offset_;
-        } else if (joint == right_ankle_roll_joint_) {
-            position -= right_ankle_roll_offset_;
-        }
-        segment[i] = position * obs_scales_dof_pos_;
+        segment[i] = (joint_pos_buffer_[joint] - joint_default_angle_[joint]) * obs_scales_dof_pos_;
     }
     if(is_teleop_.load()){
         for (size_t i = 0; i < teleop_action_.size(); i++) {

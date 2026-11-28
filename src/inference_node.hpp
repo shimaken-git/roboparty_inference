@@ -245,13 +245,6 @@ class InferenceNode : public rclcpp::Node {
     std::mutex act_mutex_, perception_mutex_, interrupt_mutex_, cmd_mutex_, mode_mutex_, lb_switch_mutex_, teleop_mutex_;
     std::vector<float> act_, last_act_, cmd_vel_, last_cmd_vel_, interrupt_action_, perception_obs_buffer_, teleop_action_;
     std::vector<float> joint_pos_buffer_, joint_vel_buffer_, joint_torques_buffer_, quat_buffer_, ang_vel_buffer_;
-    // ROBROBO_FULL URDF order. Offsets are read and written under mode_mutex_.
-    static constexpr int left_ankle_roll_joint_ = 5;
-    static constexpr int right_ankle_roll_joint_ = 11;
-    float left_ankle_roll_offset_ = 0.0f;
-    float right_ankle_roll_offset_ = 0.0f;
-    bool ankle_offset_chord_down_ = false;
-    void capture_ankle_roll_offsets();
     sensor_msgs::msg::JointState joint_state_msg_, action_msg_;
     std::vector<double> imu_correction_;
     Eigen::Quaternionf imu_correct_quat_;

@@ -21,6 +21,7 @@ def generate_launch_description():
                 name="inference_node",
                 parameters=configs,
                 output="screen",
+                emulate_tty=True,
                 # prefix=["xterm -e gdb -ex run --args"],
             ),
         ]

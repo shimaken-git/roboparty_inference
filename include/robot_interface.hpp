@@ -173,7 +173,7 @@ class RobotInterface {
     // END ankle frequency response test
     void setup_motors();
     void setup_imu();
-    void check_motors_angle();
+    bool check_motors_angle();
     void check_ankle_angle(float &pitch, float &roll, bool leftLegFlag);
     void exec_motors_parallel(const std::function<void(std::shared_ptr<MotorDriver>&, int)>& cmd_func);
 };
