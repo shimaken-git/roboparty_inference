@@ -181,6 +181,32 @@ const InferenceNode::PolicyRuntime& InferenceNode::active_policy() const {
     return policies_[active_policy_idx_];
 }
 
+void InferenceNode::write_inference_log_headers() {
+    if (act_file.is_open()) {
+        for (int i = 0; i < joint_num_; ++i) {
+            if (i != 0) {
+                act_file << ',';
+            }
+            act_file << "action_urdf_" << i << "_rad";
+        }
+        act_file << std::endl;
+    }
+    if (obs_file.is_open()) {
+        for (const auto& policy : policies_) {
+            logged_obs_columns_ = std::max(logged_obs_columns_, static_cast<size_t>(policy.obs_num));
+        }
+        obs_file << "imu_time_ns";
+        for (int i = 0; i < joint_num_; ++i) {
+            obs_file << ",joint_urdf_" << i << "_time_ns";
+        }
+        for (size_t i = 0; i < logged_obs_columns_; ++i) {
+            obs_file << ",obs_" << i;
+        }
+        obs_file << ",age_ms,error_ms,correction_ms,inference_interval_ns,inference_start_ns,inference_end_ns"
+                 << std::endl;
+    }
+}
+
 void InferenceNode::initialize_runtime_state() {
     active_policy_idx_ = 0;
 
@@ -443,12 +469,12 @@ void InferenceNode::inference() {
                 for(auto tm : joint_times_){
                     obs_file << tm << ",";
                 }
-                for(int i = 0; i < policy.obs.size(); i++){
-                    // if(i < policy.obs.size() - 1){
-                        obs_file << policy.obs[i] << ",";
-                    // }else{
-                        // obs_file << policy.obs[i] << std::endl;
-                    // }
+                for (const float value : policy.obs) {
+                    obs_file << value << ',';
+                }
+                // Keep timing columns aligned when switching to a smaller observation layout.
+                for (size_t i = policy.obs.size(); i < logged_obs_columns_; ++i) {
+                    obs_file << "nan,";
                 }
             }
 

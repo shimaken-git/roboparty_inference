@@ -16,6 +16,8 @@ void InferenceNode::load_config() {
     this->declare_parameter<float>("dt", 0.001);
     // BEGIN ankle frequency response test
     ankle_test_amplitude_ = this->declare_parameter<double>("ankle_test_amplitude_rad", 0.005);
+    const double amplitude_min = this->declare_parameter<double>("ankle_test_amplitude_min_rad", 0.0);
+    const double amplitude_max = this->declare_parameter<double>("ankle_test_amplitude_max_rad", 0.02);
     ankle_test_duration_s_ = this->declare_parameter<double>("ankle_test_duration_s", 20.0);
     ankle_frequencies_ = this->declare_parameter<std::vector<double>>(
         "ankle_test_frequencies_hz", {0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0});
@@ -55,8 +57,17 @@ void InferenceNode::load_config() {
     this->get_parameter("decimation", decimation_);
     this->get_parameter("dt", dt_);
     // BEGIN ankle frequency response test
-    if (!(ankle_test_amplitude_ >= 0.0 && ankle_test_amplitude_ <= 0.02)) {
-        throw std::invalid_argument("ankle_test_amplitude_rad must be in [0, 0.02]");
+    if (!std::isfinite(amplitude_min) || !std::isfinite(amplitude_max) ||
+        amplitude_min < 0.0 || amplitude_max < amplitude_min) {
+        throw std::invalid_argument(
+            "Ankle amplitude limits must be finite and satisfy "
+            "0 <= ankle_test_amplitude_min_rad <= ankle_test_amplitude_max_rad");
+    }
+    if (!(ankle_test_amplitude_ >= amplitude_min && ankle_test_amplitude_ <= amplitude_max)) {
+        std::ostringstream message;
+        message << "ankle_test_amplitude_rad (" << ankle_test_amplitude_ << ") must be in ["
+                << amplitude_min << ", " << amplitude_max << "] rad";
+        throw std::invalid_argument(message.str());
     }
     if (!std::isfinite(ankle_test_duration_s_) || ankle_test_duration_s_ <= 0.0) {
         throw std::invalid_argument("ankle_test_duration_s must be finite and positive");
@@ -220,6 +231,12 @@ void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Jo
             RCLCPP_INFO(this->get_logger(), "Motors reset");
         }
     }
+    // PS4 R1 + D-pad right: capture once when either input completes the chord.
+    const bool ankle_offset_chord = msg->buttons[5] == 1 && msg->axes[6] < -0.5f;
+    if (ankle_offset_chord && !ankle_offset_chord_down_) {
+        capture_ankle_roll_offsets();
+    }
+    ankle_offset_chord_down_ = ankle_offset_chord;
     if (msg->buttons[1] == 1 && msg->buttons[1] != last_button2_) {  //Xbox:B PS4:○　start/pause inference
         // BEGIN ankle frequency response test
         stop_ankle_test("inference paused by controller");
@@ -329,6 +346,41 @@ void InferenceNode::subs_joy_callback(const std::shared_ptr<sensor_msgs::msg::Jo
     last_button3_ = msg->buttons[8];
     last_button6_ = msg->buttons[4];
     last_button7_ = msg->buttons[5];
+}
+
+void InferenceNode::capture_ankle_roll_offsets() {
+    std::scoped_lock lock(mode_mutex_);
+    if (is_running_.load() || is_test_.load() || !robot_->is_init_.load()) {
+        RCLCPP_WARN(get_logger(), "Initialize motors and stop inference and test mode before capturing ankle roll offsets");
+        return;
+    }
+
+    try {
+        const auto requested_at = monotonic_ns();
+        robot_->refresh_joints();
+        const auto positions = robot_->get_joint_q();
+        const auto timestamps = robot_->get_joint_time();
+        const bool fresh_feedback = std::all_of(ankle_motors_.begin(), ankle_motors_.end(),
+            [&timestamps, requested_at](size_t index) {
+                return index < timestamps.size() && timestamps[index] >= requested_at;
+            });
+        if (!fresh_feedback || positions.size() <= right_ankle_roll_joint_ ||
+            !std::isfinite(positions[left_ankle_roll_joint_]) ||
+            !std::isfinite(positions[right_ankle_roll_joint_])) {
+            RCLCPP_WARN(get_logger(), "Ankle roll offset capture failed: missing or invalid ankle feedback");
+            return;
+        }
+
+        left_ankle_roll_offset_ = positions[left_ankle_roll_joint_];
+        right_ankle_roll_offset_ = positions[right_ankle_roll_joint_];
+        for (auto& policy : policies_) {
+            policy.is_first_frame = true;
+        }
+        RCLCPP_INFO(get_logger(), "Captured ankle roll offsets in rad: left=%+.5f right=%+.5f",
+            left_ankle_roll_offset_, right_ankle_roll_offset_);
+    } catch (const std::exception& e) {
+        RCLCPP_WARN(get_logger(), "Ankle roll offset capture failed: %s", e.what());
+    }
 }
 
 void InferenceNode::subs_cmd_callback(const std::shared_ptr<geometry_msgs::msg::Twist> msg){

@@ -33,6 +33,8 @@ inference_node:
         dt: 0.003
         # BEGIN ankle frequency response test
         ankle_test_amplitude_rad: 0.005  # 0.0 records standing without excitation.
+        ankle_test_amplitude_min_rad: 0.0
+        ankle_test_amplitude_max_rad: 0.02
         ankle_test_frequencies_hz: [0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0]
         ankle_test_duration_s: 20.0  # Measurement duration per frequency, excluding settling.
         # END ankle frequency response test

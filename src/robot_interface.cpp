@@ -456,6 +456,7 @@ void RobotInterface::refresh_joints() {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         exec_motors_parallel([this](std::shared_ptr<MotorDriver>& motor, int idx) {
+            joint_time_[motor2urdf_[idx]] = motor->get_motor_timestamp();
             joint_q_[motor2urdf_[idx]] = motor->get_motor_pos() * robot_cfg_->motor_sign_[idx];
             joint_vel_[motor2urdf_[idx]] = motor->get_motor_spd() * robot_cfg_->motor_sign_[idx];
             joint_tau_[motor2urdf_[idx]] = motor->get_motor_current() * robot_cfg_->motor_sign_[idx];
